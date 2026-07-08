@@ -288,6 +288,75 @@ def linear_axial_path(
     return path
 
 
+class WaypointPath:
+    """Piecewise-linear 6-DOF nozzle trajectory from time-keyed waypoints.
+
+    Each waypoint is (t, x, y, z, roll, pitch, yaw). Angles are degrees by
+    default (set angles_in_degrees=False for radians). Between waypoints each
+    axis is interpolated linearly in time; outside the listed time range the
+    pose is clamped to the first/last waypoint. Calling the object with a
+    time returns the Pose (angles in radians) expected by simulate().
+    """
+
+    COLUMNS = ("t", "x", "y", "z", "roll", "pitch", "yaw")
+
+    def __init__(
+        self,
+        waypoints: Sequence[Sequence[float]],
+        angles_in_degrees: bool = True,
+    ) -> None:
+        wp = np.asarray(waypoints, dtype=float)
+        if wp.ndim != 2 or wp.shape[1] != 7:
+            raise ValueError(
+                "waypoints must be rows of (t, x, y, z, roll, pitch, yaw)"
+            )
+        if len(wp) < 1:
+            raise ValueError("need at least one waypoint")
+        wp = wp[np.argsort(wp[:, 0], kind="stable")]
+        if np.any(np.diff(wp[:, 0]) < 0):
+            raise ValueError("waypoint times must not decrease")
+        if angles_in_degrees:
+            wp = wp.copy()
+            wp[:, 4:7] = np.deg2rad(wp[:, 4:7])
+        self._t = wp[:, 0]
+        self._axes = wp[:, 1:7]
+
+    @property
+    def duration(self) -> float:
+        """Time of the last waypoint."""
+        return float(self._t[-1])
+
+    def __call__(self, t: float) -> Pose:
+        # np.interp clamps to the end values outside the time range.
+        return tuple(
+            np.interp(t, self._t, self._axes[:, k]) for k in range(6)
+        )
+
+    @classmethod
+    def from_csv(cls, path: str, angles_in_degrees: bool = True) -> "WaypointPath":
+        """Load waypoints from CSV lines 't,x,y,z,roll,pitch,yaw'.
+
+        Blank lines and lines starting with '#' are ignored; a header line
+        containing the column names is ignored too.
+        """
+        rows = []
+        with open(path) as f:
+            for ln, line in enumerate(f, 1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                fields = [p.strip() for p in line.split(",")]
+                if fields[0].lower() in ("t", "time"):
+                    continue  # header
+                if len(fields) != 7:
+                    raise ValueError(f"{path}:{ln}: expected 7 fields, got {len(fields)}")
+                try:
+                    rows.append([float(p) for p in fields])
+                except ValueError as e:
+                    raise ValueError(f"{path}:{ln}: {e}") from None
+        return cls(rows, angles_in_degrees=angles_in_degrees)
+
+
 # --------------------------------------------------------------------------
 # Simulation
 # --------------------------------------------------------------------------
@@ -301,12 +370,15 @@ def simulate(
     dt: float | None = None,
     max_deg_per_step: float = 4.0,
     verbose: bool = True,
+    progress: Callable[[float], None] | None = None,
 ) -> np.ndarray:
     """Accumulate deposition thickness over [0, t_end].
 
-    omega : part angular velocity about +z (rad/s, constant)
-    dt    : time step; default limits part rotation to max_deg_per_step per
-            step (and uses <= 5000 steps only if that is coarser).
+    omega    : part angular velocity about +z (rad/s, constant)
+    dt       : time step; default limits part rotation to max_deg_per_step
+               per step (and uses <= 5000 steps only if that is coarser).
+    progress : optional callback receiving completion fraction in [0, 1],
+               called about 100 times over the run (e.g. for a GUI bar).
     Returns thickness per surface sample, same units as lengths.
     """
     if dt is None:
@@ -352,6 +424,10 @@ def simulate(
 
         if verbose and (i % max(n_steps // 10, 1) == 0 or i == n_steps - 1):
             print(f"  step {i + 1:>6}/{n_steps}  t={t:8.3f}s")
+        if progress is not None and (
+            i % max(n_steps // 100, 1) == 0 or i == n_steps - 1
+        ):
+            progress((i + 1) / n_steps)
 
     return thickness
 
@@ -360,17 +436,25 @@ def simulate(
 # Reporting
 # --------------------------------------------------------------------------
 
-def plot_results(part: Part, thickness: np.ndarray, out_png: str, title: str) -> None:
-    import matplotlib
+def make_figure(part: Part, thickness: np.ndarray, title: str, figure=None):
+    """Draw the results into a matplotlib Figure and return it.
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    Pass an existing Figure (e.g. one embedded in a GUI canvas) to reuse it;
+    otherwise a new one is created via pyplot.
+    """
+    if figure is None:
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(12, 4.5))
+    else:
+        fig = figure
+        fig.clear()
 
     if part.grid is not None:
         n_s, n_phi, s, phi, z, r = part.grid
         th = thickness.reshape(n_s, n_phi)
-        fig, (ax1, ax2) = plt.subplots(
-            1, 2, figsize=(12, 4.5), gridspec_kw={"width_ratios": [1.6, 1.0]}
+        ax1, ax2 = fig.subplots(
+            1, 2, gridspec_kw={"width_ratios": [1.6, 1.0]}
         )
         phi_deg = np.rad2deg(phi)
         mesh = ax1.pcolormesh(phi_deg, z, th, cmap="viridis", shading="nearest")
@@ -392,7 +476,7 @@ def plot_results(part: Part, thickness: np.ndarray, out_png: str, title: str) ->
         ax2.grid(alpha=0.25, lw=0.5)
     else:
         az = np.rad2deg(np.arctan2(part.points[:, 1], part.points[:, 0]))
-        fig, ax1 = plt.subplots(figsize=(9, 5))
+        ax1 = fig.subplots()
         sc = ax1.scatter(
             az, part.points[:, 2], c=thickness, s=6, cmap="viridis", lw=0
         )
@@ -403,6 +487,15 @@ def plot_results(part: Part, thickness: np.ndarray, out_png: str, title: str) ->
 
     fig.suptitle(title)
     fig.tight_layout()
+    return fig
+
+
+def plot_results(part: Part, thickness: np.ndarray, out_png: str, title: str) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+    fig = make_figure(part, thickness, title)
     fig.savefig(out_png, dpi=150)
     print(f"wrote {out_png}")
 
@@ -459,8 +552,13 @@ def main() -> None:
                    help="nozzle start z (default 10%% of height)")
     g.add_argument("--z-end", type=float, default=None,
                    help="nozzle end z (default 90%% of height)")
-    g.add_argument("--duration", type=float, default=20.0,
-                   help="traverse duration [s] (default 20)")
+    g.add_argument("--path-file",
+                   help="CSV of nozzle waypoints 't,x,y,z,roll,pitch,yaw' "
+                        "(angles in deg), linearly interpolated in time; "
+                        "overrides the axial traverse and --aoi")
+    g.add_argument("--duration", type=float, default=None,
+                   help="simulated time [s] (default: 20, or the last "
+                        "waypoint time with --path-file)")
     g.add_argument("--dt", type=float, default=None,
                    help="time step [s] (default: 4 deg of rotation per step)")
     g.add_argument("-o", "--out", default="deposition.png", help="output plot")
@@ -483,24 +581,31 @@ def main() -> None:
         profile=args.profile,
     )
 
-    z_start = args.z_start if args.z_start is not None else 0.10 * args.height
-    z_end = args.z_end if args.z_end is not None else 0.90 * args.height
-    path = linear_axial_path(z_start, z_end, args.duration, aoi_deg=args.aoi)
+    if args.path_file:
+        path = WaypointPath.from_csv(args.path_file)
+        duration = args.duration if args.duration is not None else path.duration
+        path_desc = f"waypoints from {args.path_file} ({duration}s)"
+        title = (f"path {args.path_file}, cone {args.cone_angle} deg, "
+                 f"{args.rpm} rpm, {duration}s")
+    else:
+        duration = args.duration if args.duration is not None else 20.0
+        z_start = args.z_start if args.z_start is not None else 0.10 * args.height
+        z_end = args.z_end if args.z_end is not None else 0.90 * args.height
+        path = linear_axial_path(z_start, z_end, duration, aoi_deg=args.aoi)
+        path_desc = (f"axis traverse z {z_start:.1f} -> {z_end:.1f} mm "
+                     f"over {duration}s")
+        title = (f"AOI {args.aoi} deg, cone {args.cone_angle} deg, "
+                 f"{args.rpm} rpm, {duration}s traverse")
     omega = args.rpm * 2 * np.pi / 60.0
 
     print(f"part   : {desc}")
     print(f"nozzle : half-angle {args.cone_angle} deg, {args.profile}, "
-          f"Q={args.flow_rate} mm^3/s, AOI {args.aoi} deg")
-    print(f"path   : axis traverse z {z_start:.1f} -> {z_end:.1f} mm "
-          f"over {args.duration}s, part at {args.rpm} rpm")
+          f"Q={args.flow_rate} mm^3/s")
+    print(f"path   : {path_desc}, part at {args.rpm} rpm")
 
-    thickness = simulate(part, nozzle, path, omega, args.duration, dt=args.dt)
+    thickness = simulate(part, nozzle, path, omega, duration, dt=args.dt)
     summarize(thickness, part.areas)
-    plot_results(
-        part, thickness, args.out,
-        f"AOI {args.aoi} deg, cone {args.cone_angle} deg, {args.rpm} rpm, "
-        f"{args.duration}s traverse",
-    )
+    plot_results(part, thickness, args.out, title)
 
 
 if __name__ == "__main__":

@@ -35,14 +35,48 @@ Units are consistent-but-arbitrary; the examples use mm, s, mm³/s
   (`Part.from_stl`); each facet is one sample. Use `--flip-normals` if the
   mesh winding points away from the spray side.
 
+## Nozzle path
+
+A path is any function `t -> (x, y, z, roll, pitch, yaw)`. Two builders are
+provided:
+
+* **`WaypointPath`** — a list of time-keyed waypoints
+  `(t, x, y, z, roll, pitch, yaw)` (angles in degrees), linearly
+  interpolated per axis at each simulation time step and clamped to the
+  first/last waypoint outside the listed range. Load from CSV with
+  `WaypointPath.from_csv()` or the `--path-file` CLI option — lines of
+  `t,x,y,z,roll,pitch,yaw`, `#` comments and a header row allowed:
+
+  ```csv
+  t,  x, y,   z, roll, pitch, yaw
+  0,  0, 0,  20,    0,    45,   0
+  20, 0, 0, 180,    0,    45,   0
+  ```
+
+* **`linear_axial_path()`** — the built-in example: nozzle traversing the
+  part axis at a fixed AOI (equivalent to the two-waypoint CSV above).
+
+## GUI
+
+```bash
+python spray_gui.py    # requires tkinter (e.g. apt install python3-tk)
+```
+
+![GUI screenshot](gui_screenshot.png)
+
+The left panel sets the part (cylinder, Z/R profile, or STL), nozzle,
+process parameters, and the nozzle path as an editable waypoint table
+(one `t, x, y, z, roll, pitch, yaw` line each, with CSV load/save). The
+simulation runs on a background thread with a progress bar, results render
+into the embedded matplotlib panel, and the plot or per-sample thickness
+(`x,y,z,nx,ny,nz,area,thickness`) can be exported.
+
 ## Nozzle pose and conventions
 
 Part axis = +z. The nozzle spray axis in its body frame is +x, rotated by
 intrinsic yaw–pitch–roll. With zero angles the nozzle sprays radially
 outward; pitching by `a` degrees tilts the axis toward −z and gives
-`AOI = a` on a cylindrical inner wall. A path is any function
-`t -> (x, y, z, roll, pitch, yaw)`; `linear_axial_path()` builds the
-built-in example (nozzle traversing the part axis at fixed AOI).
+`AOI = a` on a cylindrical inner wall.
 
 ## Quick start
 
@@ -55,6 +89,9 @@ python spray_sim.py -o deposition.png
 
 # Same but from an STL file:
 python spray_sim.py --stl part.stl --flip-normals -o deposition_stl.png
+
+# Custom nozzle trajectory from a waypoint CSV:
+python spray_sim.py --path-file path.csv
 
 # Knobs:
 python spray_sim.py --aoi 30 --cone-angle 10 --profile cosine \
