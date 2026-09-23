@@ -1,0 +1,631 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const $ = (s) => document.querySelector(s);
+
+// Actual dimensions of dimensional lumber (thickness x width, inches)
+const LUMBER = {
+  '2x4': { t: 1.5, w: 3.5 }, '2x6': { t: 1.5, w: 5.5 }, '2x8': { t: 1.5, w: 7.25 },
+  '2x10': { t: 1.5, w: 9.25 }, '4x4': { t: 3.5, w: 3.5 },
+};
+const STOCK_LENGTHS = { '2x4': [96, 120, 144], '4x4': [96, 120, 144], default: [96, 120, 144, 192] };
+const KERF = 0.125;
+const SHEET = { w: 48, l: 96 };
+const QUEEN = { w: 60, l: 80 };
+
+const COLORS = {
+  A: '#c7874a', B: '#d49a5c', C: '#9c5a26', D: '#b06d34', E: '#e2b46e', F: '#6e4020',
+  G: '#e9d2a2', H: '#dcc08a', M: '#c9d4e0',
+};
+const GROUP_LABELS = [
+  ['A', 'Head/foot rails'], ['B', 'Side rails'], ['C', 'Center spine'], ['D', 'Mid beam'],
+  ['E', 'Joists'], ['F', 'Legs'], ['G', 'Plywood'], ['M', 'Mattresses'],
+];
+const DEFAULT_PRICES = { // rough per-linear-foot / per-unit placeholders
+  '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6,
+  'ply0.75': 62, 'ply0.625': 52,
+  screw3: 0.25, hanger24: 1.4, hangerBig: 2.6, sd9: 0.12, deck: 0.06, pad: 0.75,
+};
+
+// ---------- formatting ----------
+function fmt(x) {
+  const s = Math.round(x * 16) / 16;
+  let whole = Math.floor(s + 1e-9);
+  let frac = Math.round((s - whole) * 16);
+  if (frac === 16) { whole++; frac = 0; }
+  if (!frac) return `${whole}″`;
+  let n = frac, d = 16;
+  while (n % 2 === 0) { n /= 2; d /= 2; }
+  return `${whole ? whole + '-' : ''}${n}/${d}″`;
+}
+const ftIn = (x) => {
+  const ft = Math.floor(x / 12), inch = x - ft * 12;
+  return inch < 1 / 32 ? `${ft}′` : `${ft}′ ${fmt(inch)}`;
+};
+const money = (x) => `$${x.toFixed(2)}`;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- design model ----------
+function readParams() {
+  const num = (id, d) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : d; };
+  return {
+    mattT: num('#mattT', 10), target: num('#target', 24), clear: Math.max(0, num('#clear', 0.5)),
+    rail: $('#rail').value, spacing: parseFloat($('#spacing').value), ply: parseFloat($('#ply').value),
+  };
+}
+
+function between(a, b, s) {
+  const n = Math.ceil((b - a) / s - 1e-9);
+  const out = [];
+  for (let i = 1; i < n; i++) out.push(a + (i * (b - a)) / n);
+  return out;
+}
+
+function design(p) {
+  const t = 1.5;
+  const W = 2 * QUEEN.w + 2 * p.clear, L = QUEEN.l + 2 * p.clear;
+  const H = W / 2, Lh = L / 2;
+  const D = p.target - p.mattT; // deck top
+  const F = D - p.ply; // frame top
+  const rh = LUMBER[p.rail].w, jh = 3.5, lg = 3.5;
+  const warnings = [];
+  if (D < 4) warnings.push('That mattress is too thick for a platform at this height. Lower the mattress thickness or raise the target.');
+  if (rh > F) warnings.push(`A ${p.rail} rail (${fmt(rh)}) is taller than the ${fmt(F)} frame height, so the rails would sit on the floor. Choose a smaller rail size.`);
+  const yR0 = Math.max(0, F - rh);
+
+  const defs = {};
+  const def = (mark, name, stock, len, note, extra = {}) =>
+    (defs[mark] = { mark, name, stock, len, note, pieces: [], ...extra });
+  const box = (x0, x1, y0, y1, z0, z1) => ({ x: [x0, x1], y: [y0, y1], z: [z0, z1] });
+  const put = (mark, b, ex, meta = {}) => defs[mark].pieces.push({ box: b, ex, ...meta });
+
+  // A — head & foot rails run full width; everything else butts between them
+  def('A', 'Head / foot rail', p.rail, W, 'Full width. The side rails and spine butt into these.');
+  put('A', box(0, W, yR0, F, 0, t), 1);
+  put('A', box(0, W, yR0, F, L - t, L), 1);
+  // B — side rails
+  def('B', 'Side rail', p.rail, L - 2 * t, 'Fits between the head and foot rails.');
+  put('B', box(0, t, yR0, F, t, L - t), 1);
+  put('B', box(W - t, W, yR0, F, t, L - t), 1);
+  // C — center spine under the mattress seam
+  def('C', 'Center spine', p.rail, L - 2 * t, 'Centered under the seam between the mattresses.');
+  put('C', box(H - t / 2, H + t / 2, yR0, F, t, L - t), 2);
+  // D — mid cross-beam, two halves
+  def('D', 'Mid beam (half)', p.rail, H - t - t / 2, 'Spans from the side rail to the spine at mid-length.');
+  put('D', box(t, H - t / 2, yR0, F, Lh - t / 2, Lh + t / 2), 2);
+  put('D', box(H + t / 2, W - t, yR0, F, Lh - t / 2, Lh + t / 2), 2);
+
+  // E — joists run head-to-foot so the plywood seams land on them
+  const seam = SHEET.w;
+  const leftX = H > seam + 3
+    ? [...between(t / 2, seam, p.spacing), seam, ...between(seam, H, p.spacing)]
+    : between(t / 2, H, p.spacing);
+  const joistX = [...leftX, ...leftX.map((x) => W - x).reverse()];
+  const jLen = Lh - t / 2 - t;
+  def('E', 'Joist', '2x4', jLen, 'On edge, in 2×4 hangers. Top flush with the rails.');
+  for (const x of joistX) {
+    put('E', box(x - t / 2, x + t / 2, F - jh, F, t, Lh - t / 2), 3, { cx: x });
+    put('E', box(x - t / 2, x + t / 2, F - jh, F, Lh + t / 2, L - t), 3, { cx: x });
+  }
+
+  // F — 4x4 legs, full height, screwed to the faces of the frame members
+  def('F', 'Leg', '4x4', F, 'Floor to frame top. Screwed to the faces of the rails and beams.');
+  const leg = (x0, z0, faces, where) => put('F', box(x0, x0 + lg, 0, F, z0, z0 + lg), 0, { faces, where });
+  leg(t, t, 2, 'corner'); leg(W - t - lg, t, 2, 'corner');
+  leg(t, L - t - lg, 2, 'corner'); leg(W - t - lg, L - t - lg, 2, 'corner');
+  leg(H + t / 2, t, 2, 'head rail, beside spine');
+  leg(H - t / 2 - lg, L - t - lg, 2, 'foot rail, beside spine');
+  leg(t, Lh + t / 2, 2, 'left side rail, beside mid beam');
+  leg(W - t - lg, Lh - t / 2 - lg, 2, 'right side rail, beside mid beam');
+  leg(H + t / 2, Lh + t / 2, 2, 'center, spine × mid beam');
+  // mid-beam legs: center them in the joist gap nearest the middle of each half
+  const sup = [t / 2, ...leftX, H];
+  let gx = H / 2;
+  for (let i = 0; i < sup.length - 1; i++) if (H / 2 >= sup[i] && H / 2 <= sup[i + 1]) gx = (sup[i] + sup[i + 1]) / 2;
+  leg(gx - lg / 2, Lh - t / 2 - lg, 1, 'left mid beam');
+  leg(W - gx - lg / 2, Lh + t / 2, 1, 'right mid beam');
+
+  // G/H — plywood deck: two full-width sheets at the outside, a strip in the middle
+  const stripW = W - 2 * seam;
+  const plyName = p.ply === 0.75 ? '¾″ plywood' : '⅝″ plywood';
+  def('G', 'Deck panel', 'ply', seam, `${fmt(seam)} × ${fmt(L)}, one on each outside edge.`, { dims: [seam, L] });
+  put('G', box(0, seam, F, D, 0, L), 4);
+  put('G', box(W - seam, W, F, D, 0, L), 4);
+  def('H', 'Deck center strip', 'ply', stripW, `${fmt(stripW)} × ${fmt(L)}, lies over the spine.`, { dims: [stripW, L] });
+  put('H', box(seam, W - seam, F, D, 0, L), 4);
+
+  const mattresses = [
+    box(p.clear, p.clear + QUEEN.w, D, D + p.mattT, p.clear, p.clear + QUEEN.l),
+    box(p.clear + QUEEN.w, p.clear + 2 * QUEEN.w, D, D + p.mattT, p.clear, p.clear + QUEEN.l),
+  ];
+
+  // lumber packing per stock type
+  const lumberCuts = {};
+  for (const d of Object.values(defs)) {
+    if (d.stock === 'ply') continue;
+    (lumberCuts[d.stock] ||= []).push(...d.pieces.map(() => ({ mark: d.mark, len: d.len })));
+  }
+  const boards = {};
+  for (const [stock, cuts] of Object.entries(lumberCuts)) boards[stock] = pack(cuts, STOCK_LENGTHS[stock] || STOCK_LENGTHS.default);
+
+  // plywood packing (pieces are full-length strips across the sheet width)
+  const plyPieces = [];
+  for (const m of ['G', 'H']) for (const _ of defs[m].pieces) plyPieces.push({ mark: m, w: defs[m].dims[0], l: L });
+  plyPieces.sort((a, b) => b.w - a.w);
+  const sheets = [];
+  for (const pc of plyPieces) {
+    let s = sheets.find((s) => s.rem >= pc.w);
+    if (!s) { s = { pieces: [], rem: SHEET.w }; sheets.push(s); }
+    s.pieces.push(pc); s.rem -= pc.w + KERF;
+  }
+  if (L > SHEET.l) warnings.push('The deck is longer than a 96″ sheet, so the plywood layout needs an extra seam.');
+
+  // hardware
+  const legs = defs.F.pieces;
+  const legFaces = legs.reduce((a, l) => a + l.faces, 0);
+  const buttJoints = 4 /* side rails */ + 2 /* spine */ + 2 /* mid beam at side rails */;
+  const joistCount = defs.E.pieces.length;
+  const supportRun = 2 * W + 2 * L + L + W + joistCount * jLen; // lines under the deck
+  const hw = [
+    { id: 'screw3', item: '3″ structural wood screws', spec: 'e.g. GRK RSS or Spax PowerLag, ¼″ × 3″', qty: legFaces * 4 + buttJoints * 3,
+      note: '4 per leg face, 3 per butt joint' },
+    { id: 'hanger24', item: '2×4 face-mount joist hangers', spec: 'Simpson LUS24 or LU24', qty: joistCount * 2, note: 'Both ends of each joist' },
+    { id: 'hangerBig', item: `${p.rail.replace('x', '×')} face-mount joist hangers`, spec: `Simpson LUS${p.rail.replace('2x', '2')}`, qty: 2,
+      note: 'Mid-beam halves where they meet the spine' },
+    { id: 'sd9', item: 'Connector screws for hangers', spec: 'Simpson SD9112 (#9 × 1½″)', qty: joistCount * 2 * 6 + 2 * 10,
+      note: 'About 6 per 2×4 hanger and 10 per large hanger' },
+    { id: 'deck', item: '1⅝″ construction screws', spec: 'for the plywood deck', qty: Math.ceil(supportRun / 8),
+      note: 'Every 8″ along every member under the deck' },
+    { id: 'pad', item: 'Felt or rubber furniture pads', spec: '3½″ square', qty: legs.length, note: 'One per leg' },
+  ];
+
+  return { p, W, L, H, Lh, D, F, rh, yR0, t, defs, joistX, leftX, mattresses, boards, sheets, hw, warnings,
+    plyName, legs, floorGap: yR0, diag: Math.hypot(W, L), gx };
+}
+
+function pack(cuts, stocks) {
+  let best = null;
+  for (const pref of stocks) {
+    const boards = [];
+    const sorted = [...cuts].sort((a, b) => b.len - a.len);
+    let ok = true;
+    for (const c of sorted) {
+      let b = boards.find((b) => b.rem >= c.len);
+      if (!b) {
+        const len = stocks.find((s) => s >= Math.max(pref, c.len)) ?? stocks.find((s) => s >= c.len);
+        if (!len) { ok = false; break; }
+        b = { len, cuts: [], rem: len };
+        boards.push(b);
+      }
+      b.cuts.push(c); b.rem -= c.len + KERF;
+    }
+    if (!ok) continue;
+    const total = boards.reduce((a, b) => a + b.len, 0);
+    if (!best || total < best.total - 1e-6 || (Math.abs(total - best.total) < 1e-6 && boards.length < best.boards.length))
+      best = { boards, total };
+  }
+  return best ? best.boards : [];
+}
+
+// ---------- prices (per-viewer convenience) ----------
+let prices = { ...DEFAULT_PRICES };
+try { Object.assign(prices, JSON.parse(localStorage.getItem('bedPrices') || '{}')); } catch {}
+const savePrices = () => { try { localStorage.setItem('bedPrices', JSON.stringify(prices)); } catch {} };
+
+// ---------- DOM rendering ----------
+function renderStats(d, cost) {
+  const boards = Object.values(d.boards).reduce((a, b) => a + b.length, 0);
+  const items = [
+    [fmt(d.p.target), 'Mattress top'], [fmt(d.D), 'Deck height'],
+    [`${fmt(d.W)} × ${fmt(d.L)}`, 'Footprint'], [fmt(d.floorGap), 'Under-rail clearance'],
+    [`${boards} + ${d.sheets.length}`, 'Boards + sheets'], [`~$${Math.round(cost)}`, 'Materials (rough)'],
+  ];
+  $('#stats').innerHTML = items.map(([v, k]) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+}
+
+function markChip(m) { return `<span class="mark" style="background:${COLORS[m]}">${m}</span>`; }
+
+function renderCuts(d) {
+  const rows = Object.values(d.defs).map((x) => {
+    const stock = x.stock === 'ply' ? d.plyName : x.stock.replace('x', '×');
+    const len = x.dims ? `${fmt(x.dims[0])} × ${fmt(x.dims[1])}` : fmt(x.len);
+    return `<tr data-mark="${x.mark}"><td>${markChip(x.mark)}</td><td>${esc(x.name)}<div class="note">${esc(x.note)}</div></td>
+      <td>${stock}</td><td class="n">${x.pieces.length}</td><td class="n">${len}</td></tr>`;
+  });
+  $('#cutTable').innerHTML = `<thead><tr><th>Mark</th><th>Part</th><th>Stock</th><th>Qty</th><th>Length</th></tr></thead><tbody>${rows.join('')}</tbody>`;
+  $('#cutTable').querySelectorAll('tbody tr').forEach((tr) => {
+    tr.addEventListener('mouseenter', () => { highlight(tr.dataset.mark); tr.classList.add('hl'); });
+    tr.addEventListener('mouseleave', () => { highlight(null); tr.classList.remove('hl'); });
+  });
+}
+
+function buyRows(d) {
+  const rows = [];
+  for (const [stock, boards] of Object.entries(d.boards)) {
+    const byLen = {};
+    boards.forEach((b) => (byLen[b.len] = (byLen[b.len] || 0) + 1));
+    for (const [len, qty] of Object.entries(byLen))
+      rows.push({ key: stock, item: `${stock.replace('x', '×')} lumber`, size: ftIn(+len), qty, unit: +len / 12, unitLabel: '/ft' });
+  }
+  rows.push({ key: `ply${d.p.ply}`, item: `${d.plyName} sheet`, size: '4′ × 8′', qty: d.sheets.length, unit: 1, unitLabel: '/sheet',
+    note: 'Sanded pine or birch ply (BC or better) keeps splinters out of the mattress cover.' });
+  for (const h of d.hw) rows.push({ key: h.id, item: h.item, size: h.spec, qty: h.qty, unit: 1, unitLabel: '/ea', hw: true, note: h.note });
+  return rows;
+}
+
+function renderBuy(d) {
+  const rows = buyRows(d);
+  const lumber = rows.filter((r) => !r.hw), hw = rows.filter((r) => r.hw);
+  const row = (r, i) => `<tr><td>${esc(r.item)}${r.note && !r.hw ? `<div class="note">${esc(r.note)}</div>` : ''}</td><td class="n">${esc(r.size)}</td>
+    <td class="n">${r.qty}</td>
+    <td class="n"><input class="price" type="number" step="0.01" min="0" data-key="${r.key}" value="${prices[r.key] ?? 0}"> <span class="note">${r.unitLabel}</span></td>
+    <td class="n" data-sub="${i}"></td></tr>`;
+  const hwRow = (r, i) => `<tr><td>${esc(r.item)}<div class="note">${esc(r.size)}</div></td><td class="n">${r.qty}</td><td class="note">${esc(r.note)}</td>
+    <td class="n"><input class="price" type="number" step="0.01" min="0" data-key="${r.key}" value="${prices[r.key] ?? 0}"> <span class="note">/ea</span></td>
+    <td class="n" data-sub="${i}"></td></tr>`;
+  $('#buyTable').innerHTML = `<thead><tr><th>Item</th><th>Size</th><th>Qty</th><th>Unit price</th><th>Subtotal</th></tr></thead>
+    <tbody>${lumber.map((r, i) => row(r, i)).join('')}</tbody><tfoot><tr><td colspan="4">Lumber &amp; plywood</td><td class="n" id="sumL"></td></tr></tfoot>`;
+  $('#hwTable').innerHTML = `<thead><tr><th>Item</th><th>Qty</th><th>Why</th><th>Unit price</th><th>Subtotal</th></tr></thead>
+    <tbody>${hw.map((r, i) => hwRow(r, i + lumber.length)).join('')}</tbody>
+    <tfoot><tr><td colspan="4">Hardware</td><td class="n" id="sumH"></td></tr><tr><td colspan="4">Estimated total</td><td class="n" id="sumT"></td></tr></tfoot>`;
+
+  const update = () => {
+    let sL = 0, sH = 0;
+    rows.forEach((r, i) => {
+      const sub = r.qty * r.unit * (prices[r.key] ?? 0);
+      document.querySelector(`[data-sub="${i}"]`).textContent = money(sub);
+      if (r.hw) sH += sub; else sL += sub;
+    });
+    $('#sumL').textContent = money(sL); $('#sumH').textContent = money(sH); $('#sumT').textContent = money(sL + sH);
+    renderStats(d, sL + sH);
+  };
+  document.querySelectorAll('.price').forEach((inp) => inp.addEventListener('input', () => {
+    const v = parseFloat(inp.value);
+    prices[inp.dataset.key] = Number.isFinite(v) ? v : 0;
+    savePrices(); update();
+  }));
+  update();
+
+  // cutting diagrams
+  const out = [];
+  for (const [stock, boards] of Object.entries(d.boards)) {
+    boards.forEach((b, i) => {
+      let x = 0;
+      const segs = b.cuts.map((c) => {
+        const s = `<span style="left:${(x / b.len) * 100}%;width:${(c.len / b.len) * 100}%;background:${COLORS[c.mark]}" title="${c.mark} · ${fmt(c.len)}">${c.mark} ${fmt(c.len)}</span>`;
+        x += c.len + KERF;
+        return s;
+      }).join('');
+      out.push(`<div class="board"><div class="lbl">${stock.replace('x', '×')} ${ftIn(b.len)} #${i + 1}</div><div class="bar">${segs}</div></div>`);
+    });
+  }
+  $('#boards').innerHTML = out.join('');
+}
+
+function renderSteps(d) {
+  const r = d.p.rail.replace('x', '×');
+  const steps = [
+    ['Confirm the numbers.', `Measure the mattress thickness and both queen mattresses (they're usually 60″ × 80″, but check). Enter the thickness above. With ${fmt(d.p.mattT)}, the deck top has to sit at ${fmt(d.D)}.`],
+    ['Cut and label.', `Cut every piece on the cut list and write its letter on it. Check that the cuts on each pair or set match exactly: A, B, C, D, all ${d.defs.E.pieces.length} E joists and all ${d.legs.length} legs. Ease the edges and sand any faces you'll see. Stain or seal the outside rails now if you want a finish.`],
+    ['Build the perimeter upside down.', `In the bedroom, lay the four ${r} rails top-edge-down on a flat floor, with the head and foot rails (A) overlapping the ends of the side rails (B). Screw through A into B, three screws per joint. Because the frame is upside down, the floor keeps every top edge flush.`],
+    ['Add the spine and mid beam.', `Center the spine (C) ${fmt(d.H)} from the outside edge and screw through A into its ends. Mark mid-length (${fmt(d.Lh)}). Screw each mid-beam half (D) through the side rail, then hang its other end on the spine with a ${r} hanger.`],
+    ['Stand the legs in.', `Still upside down, set each 4×4 leg (F) into its spot with its end on the floor, so the top stays flush. Put one in each corner, one beside the spine at the head and at the foot, one beside the mid beam on each side rail, one at the center crossing, and one under each mid-beam half about ${fmt(d.gx)} from the side. Screw 4 screws through each face it touches.`],
+    ['Hang the joists.', `Nail up the 2×4 hangers so the joist tops sit flush with the rails. Joist centers from the left edge: ${d.leftX.map(fmt).join(', ')}, then mirror them from the right edge. The joists at ${fmt(48)} and ${fmt(d.W - 48)} carry the plywood seams, so place those two carefully.`],
+    ['Flip, square, level.', `Turn the frame over (you'll want two people). Measure both diagonals, which should each be about ${fmt(d.diag)}, and push the frame until they match. Check for level and shim any leg that rocks. Stick a pad under each leg.`],
+    ['Lay the deck.', `Put the two 48″ panels (G) on the outside edges and the ${fmt(d.W - 96)} strip (H) in the middle. Drive 1⅝″ screws every 8″ into every member underneath.`],
+    ['Mattresses on.', `Set the two queens side by side. There's ${fmt(d.p.clear)} of deck showing around them. Add a bed bridge and connector strap across the seam, then check the top height, which should be about ${fmt(d.p.target)} before it settles.`],
+  ];
+  $('#stepList').innerHTML = steps.map(([h, b]) => `<li><strong>${h}</strong>${b}</li>`).join('');
+}
+
+// ---------- SVG drawings ----------
+const SVG_INK = 'stroke:var(--ink);';
+function rect(x, y, w, h, fill, extra = '') {
+  return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${Math.max(0, w).toFixed(2)}" height="${Math.max(0, h).toFixed(2)}" fill="${fill}" style="${SVG_INK}stroke-width:.8" ${extra}/>`;
+}
+function dimH(x0, x1, y, label, tick = 5) {
+  return `<g class="dim"><line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}"/><line x1="${x0}" y1="${y - tick}" x2="${x0}" y2="${y + tick}"/><line x1="${x1}" y1="${y - tick}" x2="${x1}" y2="${y + tick}"/></g>
+    <text class="dimtxt" x="${(x0 + x1) / 2}" y="${y - 6}" text-anchor="middle">${label}</text>`;
+}
+function dimV(x, y0, y1, label, side = 1, tick = 5) {
+  const tx = x + side * 8;
+  return `<g class="dim"><line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}"/><line x1="${x - tick}" y1="${y0}" x2="${x + tick}" y2="${y0}"/><line x1="${x - tick}" y1="${y1}" x2="${x + tick}" y2="${y1}"/></g>
+    <text class="dimtxt" x="${tx}" y="${(y0 + y1) / 2 + 4}" text-anchor="${side > 0 ? 'start' : 'end'}">${label}</text>`;
+}
+
+function drawStack(d) {
+  const s = 4.4, top = d.p.target, mx = Math.max(29, top + 2);
+  const Hh = mx * s + 70, floorY = mx * s + 34;
+  const Y = (inch) => floorY - inch * s;
+  const bx = 250, X = (inch) => bx + inch * s;
+  let g = '';
+  // comparison bars
+  const bars = [['Now', 29, '#9a8f82'], ['On floor', 19, '#9a8f82'], ['New', top, COLORS.C]];
+  bars.forEach(([lbl, h, c], i) => {
+    const x = 20 + i * 70;
+    g += `<rect x="${x}" y="${Y(h)}" width="44" height="${h * s}" rx="4" fill="${c}" opacity="${i === 2 ? 1 : .55}"/>`;
+    g += `<text x="${x + 22}" y="${Y(h) - 6}" text-anchor="middle" class="mono" font-size="13" font-weight="600">${fmt(h)}</text>`;
+    g += `<text x="${x + 22}" y="${floorY + 18}" text-anchor="middle" font-size="12">${lbl}</text>`;
+  });
+  // legs visible below the foot rail (back legs lighter)
+  for (const l of d.legs) {
+    const front = l.box.z[1] > d.L - 6;
+    g += rect(X(l.box.x[0]), Y(d.yR0), l.box.x[1] * s - l.box.x[0] * s, d.yR0 * s, COLORS.F, `opacity="${front ? 1 : .45}"`);
+  }
+  g += rect(X(0), Y(d.F), d.W * s, (d.F - d.yR0) * s, COLORS.A);
+  g += `<text x="${X(d.W / 2)}" y="${Y((d.F + d.yR0) / 2) + 4}" text-anchor="middle" font-size="12" font-weight="600">A · foot rail (${d.p.rail.replace('x', '×')})</text>`;
+  g += rect(X(0), Y(d.D), d.W * s, (d.D - d.F) * s, COLORS.G);
+  for (const m of d.mattresses) g += `<rect x="${X(m.x[0]) + 1}" y="${Y(m.y[1])}" width="${(m.x[1] - m.x[0]) * s - 2}" height="${(m.y[1] - m.y[0]) * s}" rx="8" fill="${COLORS.M}" style="${SVG_INK}stroke-width:.8"/>`;
+  g += `<text x="${X(d.W / 4)}" y="${Y(d.D + d.p.mattT / 2) + 4}" text-anchor="middle" font-size="12">Queen</text><text x="${X(3 * d.W / 4)}" y="${Y(d.D + d.p.mattT / 2) + 4}" text-anchor="middle" font-size="12">Queen</text>`;
+  g += `<line x1="${X(-4)}" y1="${Y(top)}" x2="${X(d.W + 4)}" y2="${Y(top)}" stroke="${COLORS.C}" stroke-dasharray="5 4" stroke-width="1.5"/>`;
+  g += `<line x1="10" y1="${floorY}" x2="${X(d.W) + 290}" y2="${floorY}" style="${SVG_INK}stroke-width:1.5"/>`;
+  // dims on the right
+  const dx = X(d.W) + 24;
+  if (d.yR0 > 0) g += dimV(dx, Y(d.yR0), Y(0), `${fmt(d.yR0)} clear`);
+  g += dimV(dx, Y(d.F), Y(d.yR0), `${fmt(d.F - d.yR0)} rail`);
+  g += dimV(dx + 110, Y(d.D), Y(0), `${fmt(d.D)} deck`);
+  g += dimV(dx, Y(top), Y(d.D), `${fmt(d.p.mattT)} mattress`);
+  g += dimV(dx + 200, Y(top), Y(0), `${fmt(top)} top`);
+  const vbW = X(d.W) + 300;
+  $('#svgStack').innerHTML = `<svg viewBox="0 0 ${vbW} ${Hh}" role="img" aria-label="Height stack elevation">${g}</svg>`;
+}
+
+function drawPlan(d) {
+  const s = 7, mL = 70, mT = 74;
+  const X = (x) => mL + x * s, Z = (z) => mT + z * s;
+  let g = '';
+  const r2 = (b, c, op = 1) => rect(X(b.x[0]), Z(b.z[0]), (b.x[1] - b.x[0]) * s, (b.z[1] - b.z[0]) * s, c, `opacity="${op}"`);
+  g += `<rect x="${X(0)}" y="${Z(0)}" width="${d.W * s}" height="${d.L * s}" fill="none" style="stroke:var(--line)"/>`;
+  for (const m of ['E', 'D', 'C', 'B', 'A']) for (const pc of d.defs[m].pieces) g += r2(pc.box, COLORS[m]);
+  for (const pc of d.defs.F.pieces) g += r2(pc.box, COLORS.F, 0.9);
+  // plywood seam lines
+  for (const x of [48, d.W - 48]) g += `<line x1="${X(x)}" y1="${Z(0) - 8}" x2="${X(x)}" y2="${Z(d.L) + 8}" stroke="${COLORS.C}" stroke-dasharray="6 5" stroke-width="1.2"/>`;
+  // labels
+  const lab = (x, z, m) => `<circle cx="${X(x)}" cy="${Z(z)}" r="11" fill="${COLORS[m]}" style="${SVG_INK}stroke-width:.8"/><text x="${X(x)}" y="${Z(z) + 4.5}" text-anchor="middle" font-size="12" font-weight="700" fill="#fff" style="fill:#fff">${m}</text>`;
+  g += lab(d.W / 4, 0.75, 'A') + lab(d.W / 4, d.L - 0.75, 'A') + lab(0.75, d.L / 4, 'B') + lab(d.W - 0.75, d.L / 4, 'B');
+  g += lab(d.H, d.L / 4, 'C') + lab(d.W * 0.36, d.Lh, 'D') + lab(d.joistX[1], d.L * 0.18, 'E') + lab(3.25, 3.25, 'F');
+  g += `<text x="${X(d.W / 2)}" y="${Z(0) - 44}" text-anchor="middle" font-size="12" font-weight="600">HEAD</text>`;
+  g += `<text x="${X(d.W / 2)}" y="${Z(d.L) + 50}" text-anchor="middle" font-size="12" font-weight="600">FOOT</text>`;
+  g += dimH(X(0), X(d.W), Z(0) - 16, fmt(d.W));
+  g += dimV(X(0) - 18, Z(0), Z(d.L), fmt(d.L), -1);
+  g += dimV(X(d.W) + 18, Z(0), Z(d.Lh), `${fmt(d.Lh)} to beam ℄`);
+  // joist centers along the bottom
+  const yb = Z(d.L) + 22;
+  let prev = 0;
+  for (const x of [...d.leftX, d.H]) {
+    g += dimH(X(prev), X(x), yb, fmt(x - prev), 4);
+    prev = x;
+  }
+  g += `<text class="dimtxt" x="${X(d.H) + 10}" y="${yb + 4}">← joist centers (mirror on the right)</text>`;
+  g += `<text class="dimtxt" x="${X(48)}" y="${Z(0) + 20}" text-anchor="middle" style="fill:${COLORS.C}">seam</text><text class="dimtxt" x="${X(d.W - 48)}" y="${Z(0) + 20}" text-anchor="middle" style="fill:${COLORS.C}">seam</text>`;
+  const vbW = X(d.W) + 170, vbH = Z(d.L) + 64;
+  $('#svgPlan').innerHTML = `<svg viewBox="0 0 ${vbW} ${vbH}" role="img" aria-label="Frame plan view">${g}</svg>`;
+}
+
+function drawPly(d) {
+  const s = 3.4, m = 30;
+  let g = `<defs><pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" style="stroke:var(--line)" stroke-width="3"/></pattern></defs>`;
+  const deckY = 44;
+  g += `<text x="${m}" y="24" font-size="13" font-weight="600">Deck (top view, head at top)</text>`;
+  const plyPieces = [...d.defs.G.pieces.map((p) => ['G', p]), ...d.defs.H.pieces.map((p) => ['H', p])];
+  for (const [mk, pc] of plyPieces) {
+    const b = pc.box;
+    g += rect(m + b.x[0] * s, deckY + b.z[0] * s, (b.x[1] - b.x[0]) * s, (b.z[1] - b.z[0]) * s, COLORS[mk]);
+    g += `<text x="${m + ((b.x[0] + b.x[1]) / 2) * s}" y="${deckY + (d.L / 2) * s}" text-anchor="middle" font-size="14" font-weight="700">${mk}</text>`;
+    g += `<text x="${m + ((b.x[0] + b.x[1]) / 2) * s}" y="${deckY + (d.L / 2) * s + 16}" text-anchor="middle" class="dimtxt">${fmt(b.x[1] - b.x[0])}</text>`;
+  }
+  for (const x of d.joistX) g += `<line x1="${m + x * s}" y1="${deckY}" x2="${m + x * s}" y2="${deckY + d.L * s}" stroke="${COLORS.C}" stroke-dasharray="3 4" opacity=".6"/>`;
+  g += dimH(m, m + d.W * s, deckY + d.L * s + 22, fmt(d.W));
+  // sheets
+  const ss = 3.0, sx0 = m + d.W * s + 60;
+  g += `<text x="${sx0}" y="24" font-size="13" font-weight="600">Cuts from ${d.sheets.length} × 4′×8′ sheets</text>`;
+  d.sheets.forEach((sh, i) => {
+    const x0 = sx0 + i * (SHEET.w * ss + 22), y0 = deckY;
+    g += `<rect x="${x0}" y="${y0}" width="${SHEET.w * ss}" height="${SHEET.l * ss}" fill="url(#hatch)" style="${SVG_INK}stroke-width:.8"/>`;
+    let cx = 0;
+    for (const pc of sh.pieces) {
+      g += rect(x0 + cx * ss, y0, pc.w * ss, pc.l * ss, COLORS[pc.mark]);
+      g += `<text x="${x0 + (cx + pc.w / 2) * ss}" y="${y0 + (pc.l / 2) * ss}" text-anchor="middle" font-size="13" font-weight="700">${pc.mark}</text>`;
+      g += `<text x="${x0 + (cx + pc.w / 2) * ss}" y="${y0 + (pc.l / 2) * ss + 15}" text-anchor="middle" class="dimtxt">${fmt(pc.w)}×${fmt(pc.l)}</text>`;
+      cx += pc.w + KERF;
+    }
+    g += `<text x="${x0 + (SHEET.w / 2) * ss}" y="${y0 + SHEET.l * ss + 18}" text-anchor="middle" class="dimtxt">Sheet ${i + 1}</text>`;
+  });
+  const vbW = sx0 + d.sheets.length * (SHEET.w * ss + 22) + 10;
+  const vbH = deckY + Math.max(d.L * s + 34, SHEET.l * ss + 30);
+  $('#svgPly').innerHTML = `<svg viewBox="0 0 ${vbW} ${vbH}" role="img" aria-label="Plywood layout">${g}</svg>`;
+}
+
+// ---------- 3D ----------
+let renderer, scene, persp, ortho, camera, controls, root, floor, grid, dirLight;
+let explodeT = 0, explodeCur = 0, currentView = 'iso', cur = null;
+const mats = {}, pickables = [];
+const EXPLODE = [0, 12, 24, 38, 58, 82];
+
+function init3d() {
+  const el = $('#viewer');
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  el.prepend(renderer.domElement);
+
+  scene = new THREE.Scene();
+  persp = new THREE.PerspectiveCamera(32, 1, 1, 6000);
+  ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -6000, 6000);
+  scene.add(new THREE.HemisphereLight(0xfff6ea, 0x6b5a48, 1.6));
+  dirLight = new THREE.DirectionalLight(0xffffff, 2.2);
+  dirLight.position.set(90, 180, 120);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.set(2048, 2048);
+  Object.assign(dirLight.shadow.camera, { left: -140, right: 140, top: 140, bottom: -140, near: 10, far: 600 });
+  dirLight.shadow.bias = -0.0005;
+  scene.add(dirLight);
+
+  floor = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.ShadowMaterial({ opacity: 0.18 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+  grid = new THREE.GridHelper(480, 40, 0x9a8f82, 0x9a8f82);
+  grid.material.transparent = true; grid.material.opacity = 0.18;
+  scene.add(grid);
+
+  root = new THREE.Group();
+  scene.add(root);
+
+  new ResizeObserver(resize).observe(el);
+  setupPicking();
+  const loop = () => {
+    explodeCur += (explodeT - explodeCur) * 0.14;
+    for (const m of pickables) m.position.y = m.userData.baseY + explodeCur * m.userData.ex;
+    controls?.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  };
+  camera = persp;
+  requestAnimationFrame(loop);
+}
+
+function build3d(d) {
+  cur = d;
+  for (const m of pickables) { m.geometry.dispose(); m.children.forEach((c) => c.geometry.dispose()); }
+  root.clear();
+  pickables.length = 0;
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x2e1f12, transparent: true, opacity: 0.4 });
+  const add = (b, mark, ex, info, opts = {}) => {
+    const g = new THREE.BoxGeometry(b.x[1] - b.x[0], b.y[1] - b.y[0], b.z[1] - b.z[0]);
+    mats[mark] ||= new THREE.MeshStandardMaterial({ color: COLORS[mark], roughness: 0.78, metalness: 0 });
+    const mesh = new THREE.Mesh(g, mats[mark]);
+    const cy = (b.y[0] + b.y[1]) / 2;
+    mesh.position.set((b.x[0] + b.x[1]) / 2 - d.W / 2, cy, (b.z[0] + b.z[1]) / 2 - d.L / 2);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.userData = { mark, baseY: cy, ex: EXPLODE[ex], info, group: opts.group || mark };
+    if (!opts.noEdges) mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), edgeMat));
+    root.add(mesh);
+    pickables.push(mesh);
+  };
+  for (const x of Object.values(d.defs)) {
+    const len = x.dims ? `${fmt(x.dims[0])} × ${fmt(x.dims[1])}` : fmt(x.len);
+    const stock = x.stock === 'ply' ? d.plyName : x.stock.replace('x', '×');
+    for (const pc of x.pieces) add(pc.box, x.mark, pc.ex, `${x.mark} · ${x.name} · ${stock} @ ${len}`, { group: x.mark === 'H' ? 'G' : x.mark });
+  }
+  mats.M ||= new THREE.MeshStandardMaterial({ color: COLORS.M, roughness: 0.95 });
+  for (const m of d.mattresses) {
+    const b = { x: [m.x[0] + 0.25, m.x[1] - 0.25], y: m.y, z: m.z };
+    add(b, 'M', 5, `Queen mattress · 60″ × 80″ × ${fmt(d.p.mattT)}`, { group: 'M' });
+  }
+  applyToggles();
+  setView(currentView, true);
+}
+
+function applyToggles() {
+  const showM = $('#tMatt').checked, showP = $('#tPly').checked;
+  for (const m of pickables) {
+    if (m.userData.group === 'M') m.visible = showM;
+    if (m.userData.group === 'G') m.visible = showP;
+  }
+  explodeT = $('#tExplode').checked ? 1 : 0;
+}
+
+function viewExtents(v, d) {
+  const top = d.p.target + ($('#tExplode').checked ? EXPLODE[5] : 0);
+  if (v === 'top') return [d.W, d.L];
+  if (v === 'front') return [d.W, top];
+  if (v === 'side') return [d.L, top];
+  return null;
+}
+
+function setView(v, keep) {
+  if (!cur) return;
+  currentView = v;
+  const d = cur, cy = d.p.target / 2;
+  const ex = viewExtents(v, d);
+  camera = ex ? ortho : persp;
+  camera.up.set(0, 1, 0);
+  if (v === 'iso') persp.position.set(150, 120, 190);
+  if (v === 'under') persp.position.set(90, -140, 170);
+  if (v === 'top') { ortho.up.set(0, 0, -1); ortho.position.set(0, 400, 0); }
+  if (v === 'front') ortho.position.set(0, cy, 400);
+  if (v === 'side') ortho.position.set(400, cy, 0);
+  ortho.zoom = 1;
+  controls?.dispose();
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  const exY = $('#tExplode').checked && v === 'iso' ? EXPLODE[4] / 2 : 0;
+  controls.target.set(0, v === 'top' ? 0 : v === 'under' ? d.F / 2 : cy + exY, 0);
+  floor.visible = grid.visible = v !== 'under';
+  resize();
+  document.querySelectorAll('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+}
+
+function resize() {
+  const el = $('#viewer');
+  const w = el.clientWidth, h = el.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  persp.aspect = aspect; persp.updateProjectionMatrix();
+  const ex = cur && viewExtents(currentView, cur);
+  if (ex) {
+    const half = Math.max(ex[1] / 2, ex[0] / 2 / aspect) * 1.18;
+    Object.assign(ortho, { left: -half * aspect, right: half * aspect, top: half, bottom: -half });
+    ortho.updateProjectionMatrix();
+  }
+}
+
+function highlight(mark) {
+  for (const [k, m] of Object.entries(mats)) {
+    const on = mark && (k === mark);
+    m.emissive?.set(on ? 0x6a3a10 : 0x000000);
+  }
+}
+
+function setupPicking() {
+  const ray = new THREE.Raycaster(), ptr = new THREE.Vector2(), tip = $('#tip'), el = renderer.domElement;
+  let last = null;
+  el.addEventListener('pointermove', (e) => {
+    const r = el.getBoundingClientRect();
+    ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ptr, camera);
+    const hit = ray.intersectObjects(pickables.filter((m) => m.visible), false)[0];
+    const mark = hit?.object.userData.mark || null;
+    if (hit) {
+      tip.textContent = hit.object.userData.info;
+      tip.style.opacity = 1;
+      const x = Math.min(e.clientX - r.left + 14, r.width - tip.offsetWidth - 6);
+      tip.style.left = `${Math.max(6, x)}px`; tip.style.top = `${e.clientY - r.top + 14}px`;
+    } else tip.style.opacity = 0;
+    if (mark !== last) {
+      highlight(mark);
+      document.querySelectorAll('#cutTable tbody tr').forEach((tr) => tr.classList.toggle('hl', tr.dataset.mark === mark));
+      last = mark;
+    }
+  });
+  el.addEventListener('pointerleave', () => { tip.style.opacity = 0; highlight(null); last = null; });
+}
+
+// ---------- wiring ----------
+function renderAll() {
+  const d = design(readParams());
+  $('#warnings').innerHTML = d.warnings.map((w) => `<div class="warn">${esc(w)}</div>`).join('');
+  renderCuts(d);
+  renderBuy(d);
+  renderSteps(d);
+  drawStack(d);
+  drawPlan(d);
+  drawPly(d);
+  if (renderer) build3d(d);
+}
+
+$('#legend').innerHTML = GROUP_LABELS.map(([m, l]) => `<span><i style="background:${COLORS[m]}"></i>${l}</span>`).join('');
+['#mattT', '#target', '#clear', '#rail', '#spacing', '#ply'].forEach((id) => $(id).addEventListener('input', renderAll));
+['#tMatt', '#tPly'].forEach((id) => $(id).addEventListener('change', applyToggles));
+$('#tExplode').addEventListener('change', () => { applyToggles(); setView(currentView); });
+document.querySelectorAll('#views button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+
+try { init3d(); } catch (e) {
+  $('#viewer').insertAdjacentHTML('beforeend', '<div class="warn" style="margin:16px">3D view unavailable in this browser (WebGL failed to start). The drawings below still apply.</div>');
+  console.error(e);
+}
+renderAll();

@@ -129,3 +129,7 @@ Volume conservation (deposited volume vs. `Q·t` when the whole cone hits
 the wall) holds to <1% for all three cone profiles and for both the
 profile-revolution and STL geometry paths; profile and STL representations
 of the same cylinder agree on the resulting thickness field.
+
+## Double queen platform bed plan (`bed/`)
+
+A static site with the build plan for a platform bed that holds two queen mattresses side by side, with the mattress top at 24″. It has an interactive 3D render, drawings, a cut list and a shopping list. It deploys to GitHub Pages through `.github/workflows/pages.yml`. To run it locally: `cd bed && python3 -m http.server`.
