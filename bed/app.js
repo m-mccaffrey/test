@@ -28,6 +28,7 @@ const STAGE_OF = { A: 1, B: 1, C: 2, D: 2, F: 3, E: 4, G: 5, H: 5, L: 6, P: 6, M
 const FASTENER_TYPES = {
   struct: { color: '#e8b400', r: 0.17, head: 0.5, label: '3″ structural screw' },
   hanger: { color: '#9aa6b1', label: 'Joist hanger' },
+  sd: { color: '#d4553a', r: 0.09, head: 0.2, label: 'SD9112 connector screw' },
   deck: { color: '#2f7de1', r: 0.12, head: 0.36, label: '1⅝″ deck screw' },
   trim: { color: '#18a999', r: 0.11, head: 0.3, label: '1⅝″ trim-head screw' },
   step: { color: '#a557d6', r: 0.11, head: 0.32, label: '1⅝″ step screw' },
@@ -39,7 +40,7 @@ const GROUP_LABELS = [
 const DEFAULT_PRICES = { // rough per-linear-foot / per-unit placeholders
   '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6, '1x4': 0.9, '1x6': 1.4, '1x8': 1.9,
   'ply0.75': 62, 'ply0.625': 52,
-  screw3: 0.25, hanger24: 1.4, hangerBig: 2.6, sd9: 0.12, deck: 0.06, pad: 0.75,
+  screw3: 0.25, screw5: 0.6, hanger24: 1.4, hangerBig: 2.6, sd9: 0.12, deck: 0.06, pad: 0.75,
   trim: 0.1, stepScrew: 0.05, glue: 6, tread: 14, stepPad: 0.5,
 };
 
@@ -72,6 +73,18 @@ function readParams() {
     stepLoc: $('#stepLoc').value,
   };
 }
+
+// closest distance between segments p1-q1 and p2-q2 (used to keep screw paths apart)
+function segDist(p1, q1, p2, q2) {
+  const sub = (u, v) => u.map((x, i) => x - v[i]), dot = (u, v) => u.reduce((s, x, i) => s + x * v[i], 0);
+  const cl = (x) => Math.max(0, Math.min(1, x));
+  const d1 = sub(q1, p1), d2 = sub(q2, p2), r = sub(p1, p2);
+  const a = dot(d1, d1), e = dot(d2, d2), f = dot(d2, r), c = dot(d1, r), b = dot(d1, d2), den = a * e - b * b;
+  let s = den > 1e-9 ? cl((b * f - c * e) / den) : 0, t = (b * s + f) / e;
+  if (t < 0) { t = 0; s = cl(-c / a); } else if (t > 1) { t = 1; s = cl((b - c) / a); }
+  return Math.hypot(...sub(p1.map((x, i) => x + d1[i] * s), p2.map((x, i) => x + d2[i] * t)));
+}
+const tipOf = (f) => f.p.map((v, k) => v + f.dir[k] * f.len);
 
 function between(a, b, s) {
   const n = Math.ceil((b - a) / s - 1e-9);
@@ -107,8 +120,10 @@ function design(p) {
     fast.push({ key, type: j.type, stage: j.stage, p: p0, dir, len, info: `${FASTENER_TYPES[j.type].label} · ${j.title}` });
     j.count++;
   };
-  const hanger = (key, axis, pos, sgn, a0, a1, y0, hh) => {
-    // axis: horizontal axis normal to the carrying face; the carried member runs from pos in direction sgn
+  const hanger = (key, sdKey, axis, pos, sgn, a0, a1, y0, hh, perFlange, perSide) => {
+    // axis: horizontal axis normal to the carrying face; the carried member runs from pos in direction sgn.
+    // Each hanger gets its connector screws: perFlange straight into the carrying member through each flange,
+    // and perSide angled (45°) through each side of the stirrup, into the carried member and on into the carrier.
     const g = 0.06, seat = 1.75, fl = 1.1, j = joints[key];
     const mk = (n, c, yy) => (axis === 'x' ? box(n[0], n[1], yy[0], yy[1], c[0], c[1]) : box(c[0], c[1], yy[0], yy[1], n[0], n[1]));
     const stir = sgn > 0 ? [pos, pos + seat] : [pos - seat, pos];
@@ -116,25 +131,42 @@ function design(p) {
     hangers.push({ key, stage: j.stage, info: `${j.title}`, axis, sgn, face: pos, span: [a0 - fl, a1 + fl], y: [y0, y0 + hh],
       boxes: [mk(stir, [a0 - g, a1 + g], [y0 - g, y0 + hh]), mk(plate, [a0 - fl, a1 + fl], [y0, y0 + hh])] });
     j.count++;
+    const P = (n, o, y) => (axis === 'x' ? [n, y, o] : [o, y, n]);
+    const Dv = (dn, dod) => (axis === 'x' ? [dn, 0, dod] : [dod, 0, dn]);
+    for (const o of [a0 - fl / 2, a1 + fl / 2]) for (let i = 1; i <= perFlange; i++)
+      screw(sdKey, P(pos + sgn * g, o, y0 + (hh * i) / (perFlange + 1)), Dv(-sgn, 0), 1.5);
+    // the two sides are staggered in height so the angled screws pass each other inside the carried member
+    const hts = { left: perSide === 1 ? [0.33] : [0.2, 0.55], right: perSide === 1 ? [0.66] : [0.4, 0.78] };
+    const s2 = Math.SQRT1_2;
+    for (const f of hts.left) screw(sdKey, P(pos + sgn * 1.0, a0 - g, y0 + hh * f), Dv(-sgn * s2, s2), 1.5);
+    for (const f of hts.right) screw(sdKey, P(pos + sgn * 1.0, a1 + g, y0 + hh * f), Dv(-sgn * s2, -s2), 1.5);
+  };
+  // does a new screw path stay clear of every screw already placed (other than its own kind, e.g. deck vs deck)?
+  const fits = (p0, dir, len, self, gap = 0.35) => {
+    const q = p0.map((v, k) => v + dir[k] * len);
+    return fast.every((f) => f.type === self || segDist(p0, q, f.p, tipOf(f)) > gap);
   };
   const onPlate = (ax, face, o, y) => hangers.some((h) => h.axis === ax && Math.abs(h.face - face) < 0.01
     && o > h.span[0] - 0.3 && o < h.span[1] + 0.3 && y > h.y[0] - 0.3 && y < h.y[1] + 0.3);
 
   // A — head & foot rails run full width; everything else butts between them
-  def('A', 'Head / foot rail', p.rail, W, 'Full width. The side rails and spine butt into these.');
+  def('A', 'Head / foot rail', p.rail, W, 'Full width. The side rails and spine halves butt into these.');
   put('A', box(0, W, yR0, F, 0, t), 1);
   put('A', box(0, W, yR0, F, L - t, L), 1);
   // B — side rails
   def('B', 'Side rail', p.rail, L - 2 * t, 'Fits between the head and foot rails.');
   put('B', box(0, t, yR0, F, t, L - t), 1);
   put('B', box(W - t, W, yR0, F, t, L - t), 1);
-  // C — center spine under the mattress seam
-  def('C', 'Center spine', p.rail, L - 2 * t, 'Centered under the seam between the mattresses.');
-  put('C', box(H - t / 2, H + t / 2, yR0, F, t, L - t), 2);
-  // D — mid cross-beam, two halves
-  def('D', 'Mid beam (half)', p.rail, H - t - t / 2, 'Spans from the side rail to the spine at mid-length.');
-  put('D', box(t, H - t / 2, yR0, F, Lh - t / 2, Lh + t / 2), 2);
-  put('D', box(H + t / 2, W - t, yR0, F, Lh - t / 2, Lh + t / 2), 2);
+  // D — mid beam: two separate 2×8s, 3½″ apart, with the middle legs sandwiched between them. Each carries one
+  // bay's joists, so every hanger screws into its own board with open space behind it: no screws meet.
+  const Dg = lg, Dz0 = Lh - Dg / 2 - t, Dz1 = Lh + Dg / 2 + t; // outer faces of the pair
+  def('D', 'Mid beam', p.rail, W - 2 * t, `Two of these, ${fmt(Dg)} apart at mid-length with the middle legs sandwiched between them. The head-side one carries the head-half joists and the foot-side one the foot half.`);
+  put('D', box(t, W - t, yR0, F, Dz0, Dz0 + t), 2);
+  put('D', box(t, W - t, yR0, F, Dz1 - t, Dz1), 2);
+  // C — spine, in two halves hung from the mid beams, under the mattress seam
+  def('C', 'Spine half', p.rail, Dz0 - t, 'Centered under the seam between the mattresses. One runs from the head rail to the head-side mid beam, the other from the foot-side mid beam to the foot rail.');
+  put('C', box(H - t / 2, H + t / 2, yR0, F, t, Dz0), 2);
+  put('C', box(H - t / 2, H + t / 2, yR0, F, Dz1, L - t), 2);
 
   // E — joists run head-to-foot so the plywood seams land on them
   const seam = SHEET.w;
@@ -142,71 +174,82 @@ function design(p) {
     ? [...between(t / 2, seam, p.spacing), seam, ...between(seam, H, p.spacing)]
     : between(t / 2, H, p.spacing);
   const joistX = [...leftX, ...leftX.map((x) => W - x).reverse()];
-  const jLen = Lh - t / 2 - t;
+  const jLen = Dz0 - t;
   def('E', 'Joist', '2x4', jLen, 'On edge, in 2×4 hangers. Top flush with the rails.');
   for (const x of joistX) {
-    put('E', box(x - t / 2, x + t / 2, F - jh, F, t, Lh - t / 2), 3, { cx: x });
-    put('E', box(x - t / 2, x + t / 2, F - jh, F, Lh + t / 2, L - t), 3, { cx: x });
+    put('E', box(x - t / 2, x + t / 2, F - jh, F, t, Dz0), 3, { cx: x });
+    put('E', box(x - t / 2, x + t / 2, F - jh, F, Dz1, L - t), 3, { cx: x });
   }
 
   // F — 4x4 legs, full height, screwed to the faces of the frame members
   def('F', 'Leg', '4x4', F, 'Floor to frame top. Screwed to the faces of the rails and beams.');
-  const leg = (x0, z0, faces, where) => put('F', box(x0, x0 + lg, 0, F, z0, z0 + lg), 0, { faces, where });
-  leg(t, t, 2, 'corner'); leg(W - t - lg, t, 2, 'corner');
-  leg(t, L - t - lg, 2, 'corner'); leg(W - t - lg, L - t - lg, 2, 'corner');
-  leg(H + t / 2, t, 2, 'head rail, beside spine');
-  leg(H - t / 2 - lg, L - t - lg, 2, 'foot rail, beside spine');
-  leg(t, Lh + t / 2, 2, 'left side rail, beside mid beam');
-  leg(W - t - lg, Lh - t / 2 - lg, 2, 'right side rail, beside mid beam');
-  leg(H + t / 2, Lh + t / 2, 2, 'center, spine × mid beam');
+  const leg = (x0, z0, where) => put('F', box(x0, x0 + lg, 0, F, z0, z0 + lg), 0, { where });
+  leg(t, t, 'corner'); leg(W - t - lg, t, 'corner');
+  leg(t, L - t - lg, 'corner'); leg(W - t - lg, L - t - lg, 'corner');
+  leg(H + t / 2, t, 'head rail, beside spine');
+  leg(H - t / 2 - lg, L - t - lg, 'foot rail, beside spine');
+  const mz = Lh - lg / 2; // legs sandwiched between the two mid beams
+  leg(t, mz, 'left side rail, between the mid beams');
+  leg(W - t - lg, mz, 'right side rail, between the mid beams');
+  leg(H + t / 2 + 1.85, mz, 'center, beside the spine hangers'); // clear of the spine hangers' flanges
   // mid-beam legs: center them in the joist gap nearest the middle of each half
   const sup = [t / 2, ...leftX, H];
   let gx = H / 2;
   for (let i = 0; i < sup.length - 1; i++) if (H / 2 >= sup[i] && H / 2 <= sup[i + 1]) gx = (sup[i] + sup[i + 1]) / 2;
-  leg(gx - lg / 2, Lh - t / 2 - lg, 1, 'left mid beam');
-  leg(W - gx - lg / 2, Lh + t / 2, 1, 'right mid beam');
+  leg(gx - lg / 2, mz, 'left, between the mid beams');
+  leg(W - gx - lg / 2, mz, 'right, between the mid beams');
 
   // ---- frame fasteners ----
-  const rb = (f) => yR0 + (F - yR0) * f; // height on a rail, as a fraction up from its bottom edge
-  const r3 = [0.2, 0.5, 0.8];
-  const r3txt = r3.map((f) => fmt((F - yR0) * (1 - f))).reverse().join(', ');
+  // Screw heights on a rail, as fractions of its height from the bottom. Screws running along z and along x cross
+  // each other at corners and legs, so each family gets its own heights and no two paths ever meet:
+  //   ZB: butt joints driven along z (A into B and C)     XB: butt joints driven along x (B into D)
+  //   XL: leg screws driven along x                        ZL: leg screws driven along z
+  const ZB = [0.2, 0.5, 0.8], XB = [0.35, 0.5, 0.65], XL = [0.35, 0.65], ZL = [0.2, 0.8];
+  const rb = (f) => yR0 + (F - yR0) * f;
+  const hts = (fs) => fs.map((f) => fmt((F - yR0) * (1 - f))).reverse().join(', ');
   const fromTop = 'down from the top edge (the edge on the floor while the frame is upside down)';
   const R = p.rail.replace('x', '×');
   joint('corner', 1, 'struct', 'Head/foot rail (A) into side rail (B)',
-    `3 per corner, driven through the outside face of A into the end of B: ${fmt(t / 2)} in from the end of A, at ${r3txt} ${fromTop}.`);
-  for (const x of [t / 2, W - t / 2]) for (const f of r3) {
+    `3 per corner, driven through the outside face of A into the end of B: ${fmt(t / 2)} in from the end of A, at ${hts(ZB)} ${fromTop}.`);
+  for (const x of [t / 2, W - t / 2]) for (const f of ZB) {
     screw('corner', [x, rb(f), 0], [0, 0, 1], 3);
     screw('corner', [x, rb(f), L], [0, 0, -1], 3);
   }
-  joint('spine', 2, 'struct', 'Head/foot rail (A) into spine (C)',
-    `3 at each end, through A into the end of C on the center mark (${fmt(H)} from either side), at ${r3txt} down from the top edge.`);
-  for (const f of r3) { screw('spine', [H, rb(f), 0], [0, 0, 1], 3); screw('spine', [H, rb(f), L], [0, 0, -1], 3); }
   joint('beamSide', 2, 'struct', 'Side rail (B) into mid beam (D)',
-    `3 on each side, through B into the end of D, centered ${fmt(Lh)} from the head end, at ${r3txt} down from the top edge.`);
-  for (const f of r3) { screw('beamSide', [0, rb(f), Lh], [1, 0, 0], 3); screw('beamSide', [W, rb(f), Lh], [-1, 0, 0], 3); }
-  joint('beamHanger', 2, 'hanger', `Mid beam (D) into spine (C): ${R} face-mount hanger`,
-    `One hanger on each side of the spine, seat flush with the bottom of the rail. Hold D in place, then nail or screw every flange hole (SD9112).`);
-  hanger('beamHanger', 'x', H - t / 2, -1, Lh - t / 2, Lh + t / 2, yR0, rh - 1);
-  hanger('beamHanger', 'x', H + t / 2, 1, Lh - t / 2, Lh + t / 2, yR0, rh - 1);
+    `3 into each mid beam on each side (6 per side), through B into the end of D, centered ${fmt(Dz0 + t / 2)} and ${fmt(Dz1 - t / 2)} from the head end, at ${hts(XB)} ${fromTop}.`);
+  for (const f of XB) for (const z of [Dz0 + t / 2, Dz1 - t / 2]) {
+    screw('beamSide', [0, rb(f), z], [1, 0, 0], 3); screw('beamSide', [W, rb(f), z], [-1, 0, 0], 3);
+  }
+  joint('spine', 2, 'struct', 'Head/foot rail (A) into spine half (C)',
+    `3 at each end, through A into the end of C on the center mark (${fmt(H)} from either side), at ${hts(ZB)} down from the top edge.`);
+  for (const f of ZB) { screw('spine', [H, rb(f), 0], [0, 0, 1], 3); screw('spine', [H, rb(f), L], [0, 0, -1], 3); }
+  joint('spineHanger', 2, 'hanger', `Spine half (C) into mid beam (D): ${R} face-mount hanger (LUS${p.rail.replace('2x', '2')})`,
+    `One hanger on the outside face of each mid beam, centered on the ${fmt(H)} mark with the seat flush with the bottom edge. The two hangers are on different boards with a gap between, so their screws never meet.`);
+  joint('spineHangerSD', 2, 'sd', 'Connector screws for the spine hangers',
+    `3 straight through each flange into the beam, then 2 angled through each side of the hanger into the spine, staggered high and low so they pass each other.`);
+  hanger('spineHanger', 'spineHangerSD', 'z', Dz0, -1, H - t / 2, H + t / 2, yR0, rh - 1, 3, 2);
+  hanger('spineHanger', 'spineHangerSD', 'z', Dz1, 1, H - t / 2, H + t / 2, yR0, rh - 1, 3, 2);
 
   joint('joistHanger', 4, 'hanger', 'Joist (E) into rail/beam: 2×4 face-mount hanger (LUS24)',
-    `A hanger at both ends of every joist, with the seat ${fmt(jh)} below the rail top so the joist sits flush. A joist offcut makes a good gauge. Fill every hole (SD9112).`);
+    `A hanger at both ends of every joist, with the seat ${fmt(jh)} below the rail top so the joist sits flush. A joist offcut makes a good gauge. Head-half joists hang on the head-side mid beam and foot-half joists on the foot-side one.`);
+  joint('joistHangerSD', 4, 'sd', 'Connector screws for the joist hangers',
+    `2 straight through each flange into the rail or beam (4 per hanger), with the joist offcut in the hanger as a spacer. Then set the joist and drive 1 angled screw through each side of the hanger, one high and one low so they miss each other.`);
   for (const x of joistX) {
-    hanger('joistHanger', 'z', t, 1, x - t / 2, x + t / 2, F - jh, 3.125);
-    hanger('joistHanger', 'z', Lh - t / 2, -1, x - t / 2, x + t / 2, F - jh, 3.125);
-    hanger('joistHanger', 'z', Lh + t / 2, 1, x - t / 2, x + t / 2, F - jh, 3.125);
-    hanger('joistHanger', 'z', L - t, -1, x - t / 2, x + t / 2, F - jh, 3.125);
+    hanger('joistHanger', 'joistHangerSD', 'z', t, 1, x - t / 2, x + t / 2, F - jh, 3.125, 2, 1);
+    hanger('joistHanger', 'joistHangerSD', 'z', Dz0, -1, x - t / 2, x + t / 2, F - jh, 3.125, 2, 1);
+    hanger('joistHanger', 'joistHangerSD', 'z', Dz1, 1, x - t / 2, x + t / 2, F - jh, 3.125, 2, 1);
+    hanger('joistHanger', 'joistHangerSD', 'z', L - t, -1, x - t / 2, x + t / 2, F - jh, 3.125, 2, 1);
   }
 
-  // legs: 4 screws through every member face a leg touches, driven from the member's far side into the leg
-  const legF = [0.28, 0.68];
+  // legs: 4 screws through every member face a leg touches, driven from the member's far side into the leg.
+  // The doubled mid beam counts as one 3″ member, so its screws are 5″ long.
   joint('leg', 3, 'struct', 'Rail/beam into leg (F)',
-    `4 per face the leg touches, driven from the far side of the rail or beam into the leg: 2 columns about ½″ in from the leg's edges, at ${legF.map((f) => fmt((F - yR0) * (1 - f))).reverse().join(' and ')} ${fromTop}. Near a hanger, move the column over to clear its flange.`);
-  const members = ['A', 'B', 'C', 'D'].flatMap((m) => defs[m].pieces.map((pc) => ({ m, b: pc.box })));
+    `4 per face the leg touches, driven from the far side of the rail or beam into the leg: 2 columns about ½″ in from the leg's edges. Screws through a side rail or spine go at ${hts(XL)}, and screws through a head/foot rail or mid beam go at ${hts(ZL)}, ${fromTop}. Using different heights keeps screws from the two faces from crossing inside the leg. The legs between the two mid beams get screws from both beams: the foot-side beam's two columns sit ¾″ in from the head-side beam's, so the tips don't meet. Near a hanger, move the column over to clear its flange.`);
+  const members = ['A', 'B', 'C', 'D'].flatMap((m) => defs[m].pieces.map((pc) => pc.box));
   for (const lgp of defs.F.pieces) {
     const Lb = lgp.box;
     lgp.faces = 0;
-    for (const { b } of members) for (const ax of ['x', 'z']) {
+    for (const b of members) for (const ax of ['x', 'z']) {
       const o = ax === 'x' ? 'z' : 'x';
       const sgn = Math.abs(b[ax][1] - Lb[ax][0]) < 1e-6 ? 1 : Math.abs(b[ax][0] - Lb[ax][1]) < 1e-6 ? -1 : 0;
       if (!sgn) continue;
@@ -214,12 +257,18 @@ function design(p) {
       if (hi - lo < 1) continue;
       lgp.faces++;
       const entry = sgn > 0 ? b[ax][0] : b[ax][1];
-      const ys = legF.map(rb);
+      const ys = (ax === 'x' ? XL : ZL).map(rb);
       const clear = [];
       for (let c = lo + 0.5; c <= hi - 0.5 + 1e-9; c += 0.125) if (ys.every((y) => !onPlate(ax, entry, c, y))) clear.push(c);
       if (!clear.length) continue;
-      const cols = clear[clear.length - 1] - clear[0] >= 1 ? [clear[0], clear[clear.length - 1]] : [clear[0]];
-      for (const c of cols) for (const y of ys) screw('leg', ax === 'x' ? [entry, y, c] : [c, y, entry], ax === 'x' ? [sgn, 0, 0] : [0, 0, sgn], 3);
+      // screws entering from the high side along z (foot rail, foot-side mid beam) sit ¾″ further in,
+      // so they never line up tip-to-tip with the ones coming from the other side of a sandwiched leg
+      const ins = ax === 'z' && sgn < 0 ? 0.75 : 0;
+      const pick = clear.filter((c) => c >= clear[0] + ins - 1e-9 && c <= clear[clear.length - 1] - ins + 1e-9);
+      const src = pick.length ? pick : clear;
+      const cols = src[src.length - 1] - src[0] >= 1 ? [src[0], src[src.length - 1]] : [src[0]];
+      for (const c of cols) for (const y of ys)
+        screw('leg', ax === 'x' ? [entry, y, c] : [c, y, entry], ax === 'x' ? [sgn, 0, 0] : [0, 0, sgn], 3);
     }
   }
 
@@ -233,7 +282,7 @@ function design(p) {
   put('H', box(seam, W - seam, F, D, 0, L), 4);
 
   joint('deck', 5, 'deck', 'Deck into frame',
-    `Every 8″ down the center line of every rail, beam and joist, starting 1½″ from each end. The two seam joists (${fmt(seam)} and ${fmt(W - seam)}) get a row on each side of the seam, ⅜″ in from each panel edge.`);
+    `Every 8″ down the center line of every rail, beam and joist, starting 1½″ from each end, moving a screw over where it would hit a frame screw below. The two seam joists (${fmt(seam)} and ${fmt(W - seam)}) get a row on each side of the seam, ⅜″ in from each panel edge.`);
   for (const m of ['A', 'B', 'C', 'D', 'E']) for (const pc of defs[m].pieces) {
     const b = pc.box, alongX = b.x[1] - b.x[0] > b.z[1] - b.z[0];
     const cx = (b.x[0] + b.x[1]) / 2, cz = (b.z[0] + b.z[1]) / 2;
@@ -242,7 +291,11 @@ function design(p) {
     const offs = m === 'E' && [seam, W - seam].some((sx) => Math.abs(cx - sx) < 0.01) ? [-0.375, 0.375] : [0];
     for (let i = 0; i <= n; i++) {
       const a = a0 + 1.5 + (i * (a1 - a0 - 3)) / n;
-      for (const o of offs) screw('deck', alongX ? [a, D, cz + o] : [cx + o, D, a], [0, -1, 0], 1.625);
+      for (const o of offs) {
+        const at = (v) => (alongX ? [v, D, cz + o] : [cx + o, D, v]);
+        const v = [0, 0.75, -0.75, 1.5, -1.5, 2.25, -2.25].map((dv) => a + dv).find((v) => v > a0 + 0.5 && v < a1 - 0.5 && fits(at(v), [0, -1, 0], 1.625, 'deck'));
+        if (v !== undefined) screw('deck', at(v), [0, -1, 0], 1.625);
+      }
     }
   }
 
@@ -265,15 +318,15 @@ function design(p) {
     const ov = F - bot;
     const ys = ov >= 1.6 ? [F - 0.55, bot + 0.55] : [(F + bot) / 2];
     joint('lip', 6, 'trim', 'Lip (L/P) into rail',
-      `Pairs every 16″, starting 2″ from each end, ${ys.map((y) => fmt(top - y)).join(' and ')} down from the lip's top edge (that's into the rail, below the deck). Nudge a pair over if it lands on a structural screw head.`);
-    const heads = fast.filter((f) => f.type === 'struct');
+      `Pairs every 16″, starting 2″ from each end, ${ys.map((y) => fmt(top - y)).join(' and ')} down from the lip's top edge (that's into the rail, below the deck). A pair moves over wherever it would hit a frame screw or a hanger screw coming through the rail.`);
     const lipRun = (face, ax, dir, a0, a1, railFace) => {
       const n = Math.max(1, Math.ceil((a1 - a0 - 4) / 16));
       for (let i = 0; i <= n; i++) {
         const base = a0 + 2 + (i * (a1 - a0 - 4)) / n;
-        const ni = ax === 'x' ? 0 : 2, ai = ax === 'x' ? 2 : 0;
-        const hit = (v) => heads.some((h) => Math.abs(h.p[ni] - railFace) < 0.01 && ys.some((y) => Math.hypot(h.p[ai] - v, h.p[1] - y) < 1));
-        const a = [base, base + 1.5, base - 1.5, base + 3].find((v) => !hit(v)) ?? base;
+        const at = (v, y) => (ax === 'x' ? [face, y, v] : [v, y, face]);
+        const a = [0, 1, -1, 2, -2, 3, -3, 4, -4].map((d) => base + d)
+          .find((v) => v >= a0 + 1.5 && v <= a1 - 1.5 && ys.every((y) => fits(at(v, y), dir, 1.625, null)));
+        if (a === undefined) continue;
         for (const y of ys) screw('lip', ax === 'x' ? [face, y, a] : [a, y, face], dir, 1.625);
       }
     };
@@ -368,12 +421,12 @@ function design(p) {
   const legs = defs.F.pieces;
   const hw = [
     { id: 'screw3', item: '3″ structural wood screws', spec: 'e.g. GRK RSS or Spax PowerLag, ¼″ × 3″', qty: fast.filter((f) => f.type === 'struct').length,
-      note: '4 per leg face, 3 per butt joint' },
+      note: 'Butt joints and legs' },
     { id: 'hanger24', item: '2×4 face-mount joist hangers', spec: 'Simpson LUS24 or LU24', qty: joints.joistHanger.count, note: 'Both ends of each joist' },
-    { id: 'hangerBig', item: `${p.rail.replace('x', '×')} face-mount joist hangers`, spec: `Simpson LUS${p.rail.replace('2x', '2')}`, qty: 2,
-      note: 'Mid-beam halves where they meet the spine' },
-    { id: 'sd9', item: 'Connector screws for hangers', spec: 'Simpson SD9112 (#9 × 1½″)', qty: joints.joistHanger.count * 6 + joints.beamHanger.count * 10,
-      note: 'About 6 per 2×4 hanger and 10 per large hanger' },
+    { id: 'hangerBig', item: `${p.rail.replace('x', '×')} face-mount joist hangers`, spec: `Simpson LUS${p.rail.replace('2x', '2')}`, qty: joints.spineHanger.count,
+      note: 'Spine halves where they meet the mid beam' },
+    { id: 'sd9', item: 'Connector screws for hangers', spec: 'Simpson SD9112 (#9 × 1½″)', qty: fast.filter((f) => f.type === 'sd').length,
+      note: '6 per 2×4 hanger and 10 per large hanger, all shown in the 3D view' },
     { id: 'deck', item: '1⅝″ construction screws', spec: 'for the plywood deck', qty: joints.deck.count,
       note: 'Every 8″ along every member under the deck' },
     { id: 'pad', item: 'Felt or rubber furniture pads', spec: '3½″ square', qty: legs.length, note: 'One per leg' },
@@ -548,8 +601,8 @@ function renderSteps(d) {
     ['Confirm the numbers.', `Measure the mattress thickness and both queen mattresses (they're usually 60″ × 80″, but check). Enter the thickness above. With ${fmt(d.p.mattT)}, the deck top has to sit at ${fmt(d.D)}.`],
     ['Cut and label.', `Cut every piece on the cut list and write its letter on it. Check that the cuts on each pair or set match exactly: A, B, C, D, all ${d.defs.E.pieces.length} E joists and all ${d.legs.length} legs.${d.step ? ' Cut the step pieces (S, T, U) from the plywood offcuts, following the sheet diagram.' : ''} Ease the edges and sand any faces you'll see.${lb ? ` Stain or seal the ${lb} lip boards now if you want a finish.` : ''}`],
     ['Build the perimeter upside down.', `In the bedroom, lay the four ${r} rails top-edge-down on a flat floor, with the head and foot rails (A) overlapping the ends of the side rails (B). Screw through A into B, three screws per joint. Because the frame is upside down, the floor keeps every top edge flush.`],
-    ['Add the spine and mid beam.', `Center the spine (C) ${fmt(d.H)} from the outside edge and screw through A into its ends. Mark mid-length (${fmt(d.Lh)}). Screw each mid-beam half (D) through the side rail, then hang its other end on the spine with a ${r} hanger.`],
-    ['Stand the legs in.', `Still upside down, set each 4×4 leg (F) into its spot with its end on the floor, so the top stays flush. Put one in each corner, one beside the spine at the head and at the foot, one beside the mid beam on each side rail, one at the center crossing, and one under each mid-beam half about ${fmt(d.gx)} from the side. Screw 4 screws through each face it touches.`],
+    ['Add the spine and mid beam.', `Set the two mid beams (D) across the frame ${fmt(3.5)} apart, centered on mid-length (${fmt(d.Lh)}). A 4×4 offcut between them makes a good spacer. Screw through each side rail (B) into the ends of both beams. Hang the two spine halves (C) from the beam with ${r} hangers, one on each face, and screw through A into their other ends at the ${fmt(d.H)} center mark.`],
+    ['Stand the legs in.', `Still upside down, set each 4×4 leg (F) into its spot with its end on the floor, so the top stays flush. Put one in each corner, one beside the spine at the head and at the foot, and five sandwiched between the two mid beams: one against each side rail, one just beside the spine hangers, and one in each half about ${fmt(d.gx)} from the side. Screw 4 screws through each face it touches.`],
     ['Hang the joists.', `Nail up the 2×4 hangers so the joist tops sit flush with the rails. Joist centers from the left edge: ${d.leftX.map(fmt).join(', ')}, then mirror them from the right edge. The joists at ${fmt(48)} and ${fmt(d.W - 48)} carry the plywood seams, so place those two carefully.`],
     ['Flip, square, level.', `Turn the frame over (you'll want two people). Measure both diagonals, which should each be about ${fmt(d.diag)}, and push the frame until they match. Check for level and shim any leg that rocks. Stick a pad under each leg.`],
     ['Lay the deck.', `Put the two 48″ panels (G) on the outside edges and the ${fmt(d.W - 96)} strip (H) in the middle. Drive 1⅝″ screws every 8″ into every member underneath.`],
