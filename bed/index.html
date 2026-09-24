@@ -92,7 +92,7 @@
   <section id="render" class="card">
     <div class="section-head">
       <h2>3D render</h2>
-      <p>Drag to orbit, scroll to zoom, right-drag to pan. Hover a part to identify it. Head of bed is at the back (the "Top" view has it at the top).</p>
+      <p>Drag to orbit, scroll to zoom, right-drag to pan. Hover a part or fastener to identify it. Head of bed is at the back (the "Top" view has it at the top).</p>
     </div>
     <div class="toolbar">
       <div class="seg" id="views">
@@ -107,7 +107,17 @@
         <label><input type="checkbox" id="tPly" checked> Plywood</label>
         <label><input type="checkbox" id="tStep" checked> Step</label>
         <label><input type="checkbox" id="tExplode"> Exploded</label>
+        <label><input type="checkbox" id="tFast"> Fasteners</label>
+        <label><input type="checkbox" id="tXray"> X-ray</label>
       </div>
+    </div>
+    <div class="stepper">
+      <div class="stbtns">
+        <button id="stPrev" aria-label="Previous build step">‹</button>
+        <button id="stAll">Step through the build</button>
+        <button id="stNext" aria-label="Next build step">›</button>
+      </div>
+      <div class="cap" id="stCap"></div>
     </div>
     <div class="viewer" id="viewer">
       <div class="tip" id="tip"></div>

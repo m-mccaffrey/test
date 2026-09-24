@@ -23,6 +23,15 @@ const COLORS = {
   L: '#7d5234', P: '#8c5f3c', S: '#c89f6c', T: '#b48a58', U: '#a07a4c',
 };
 const GROUP_OF = { H: 'G', P: 'L', T: 'S', U: 'S' };
+// build step (stage) each part is installed in
+const STAGE_OF = { A: 1, B: 1, C: 2, D: 2, F: 3, E: 4, G: 5, H: 5, L: 6, P: 6, M: 7, S: 8, T: 8, U: 8 };
+const FASTENER_TYPES = {
+  struct: { color: '#e8b400', r: 0.17, head: 0.5, label: '3″ structural screw' },
+  hanger: { color: '#9aa6b1', label: 'Joist hanger' },
+  deck: { color: '#2f7de1', r: 0.12, head: 0.36, label: '1⅝″ deck screw' },
+  trim: { color: '#18a999', r: 0.11, head: 0.3, label: '1⅝″ trim-head screw' },
+  step: { color: '#a557d6', r: 0.11, head: 0.32, label: '1⅝″ step screw' },
+};
 const GROUP_LABELS = [
   ['A', 'Head/foot rails'], ['B', 'Side rails'], ['C', 'Center spine'], ['D', 'Mid beam'],
   ['E', 'Joists'], ['F', 'Legs'], ['G', 'Plywood'], ['L', 'Lip'], ['S', 'Dog step'], ['M', 'Mattresses'],
@@ -89,6 +98,28 @@ function design(p) {
   const box = (x0, x1, y0, y1, z0, z1) => ({ x: [x0, x1], y: [y0, y1], z: [z0, z1] });
   const put = (mark, b, ex, meta = {}) => defs[mark].pieces.push({ box: b, ex, ...meta });
 
+  // fasteners: every screw is an entry point + direction; hangers are a stirrup + flange plate.
+  // joints[key] describes one kind of connection for the build steps and the hover tooltip.
+  const fast = [], hangers = [], joints = {};
+  const joint = (key, stage, type, title, where) => (joints[key] = { key, stage, type, title, where, count: 0 });
+  const screw = (key, p0, dir, len) => {
+    const j = joints[key];
+    fast.push({ key, type: j.type, stage: j.stage, p: p0, dir, len, info: `${FASTENER_TYPES[j.type].label} · ${j.title}` });
+    j.count++;
+  };
+  const hanger = (key, axis, pos, sgn, a0, a1, y0, hh) => {
+    // axis: horizontal axis normal to the carrying face; the carried member runs from pos in direction sgn
+    const g = 0.06, seat = 1.75, fl = 1.1, j = joints[key];
+    const mk = (n, c, yy) => (axis === 'x' ? box(n[0], n[1], yy[0], yy[1], c[0], c[1]) : box(c[0], c[1], yy[0], yy[1], n[0], n[1]));
+    const stir = sgn > 0 ? [pos, pos + seat] : [pos - seat, pos];
+    const plate = sgn > 0 ? [pos, pos + g] : [pos - g, pos];
+    hangers.push({ key, stage: j.stage, info: `${j.title}`, axis, sgn, face: pos, span: [a0 - fl, a1 + fl], y: [y0, y0 + hh],
+      boxes: [mk(stir, [a0 - g, a1 + g], [y0 - g, y0 + hh]), mk(plate, [a0 - fl, a1 + fl], [y0, y0 + hh])] });
+    j.count++;
+  };
+  const onPlate = (ax, face, o, y) => hangers.some((h) => h.axis === ax && Math.abs(h.face - face) < 0.01
+    && o > h.span[0] - 0.3 && o < h.span[1] + 0.3 && y > h.y[0] - 0.3 && y < h.y[1] + 0.3);
+
   // A — head & foot rails run full width; everything else butts between them
   def('A', 'Head / foot rail', p.rail, W, 'Full width. The side rails and spine butt into these.');
   put('A', box(0, W, yR0, F, 0, t), 1);
@@ -135,6 +166,63 @@ function design(p) {
   leg(gx - lg / 2, Lh - t / 2 - lg, 1, 'left mid beam');
   leg(W - gx - lg / 2, Lh + t / 2, 1, 'right mid beam');
 
+  // ---- frame fasteners ----
+  const rb = (f) => yR0 + (F - yR0) * f; // height on a rail, as a fraction up from its bottom edge
+  const r3 = [0.2, 0.5, 0.8];
+  const r3txt = r3.map((f) => fmt((F - yR0) * (1 - f))).reverse().join(', ');
+  const fromTop = 'down from the top edge (the edge on the floor while the frame is upside down)';
+  const R = p.rail.replace('x', '×');
+  joint('corner', 1, 'struct', 'Head/foot rail (A) into side rail (B)',
+    `3 per corner, driven through the outside face of A into the end of B: ${fmt(t / 2)} in from the end of A, at ${r3txt} ${fromTop}.`);
+  for (const x of [t / 2, W - t / 2]) for (const f of r3) {
+    screw('corner', [x, rb(f), 0], [0, 0, 1], 3);
+    screw('corner', [x, rb(f), L], [0, 0, -1], 3);
+  }
+  joint('spine', 2, 'struct', 'Head/foot rail (A) into spine (C)',
+    `3 at each end, through A into the end of C on the center mark (${fmt(H)} from either side), at ${r3txt} down from the top edge.`);
+  for (const f of r3) { screw('spine', [H, rb(f), 0], [0, 0, 1], 3); screw('spine', [H, rb(f), L], [0, 0, -1], 3); }
+  joint('beamSide', 2, 'struct', 'Side rail (B) into mid beam (D)',
+    `3 on each side, through B into the end of D, centered ${fmt(Lh)} from the head end, at ${r3txt} down from the top edge.`);
+  for (const f of r3) { screw('beamSide', [0, rb(f), Lh], [1, 0, 0], 3); screw('beamSide', [W, rb(f), Lh], [-1, 0, 0], 3); }
+  joint('beamHanger', 2, 'hanger', `Mid beam (D) into spine (C): ${R} face-mount hanger`,
+    `One hanger on each side of the spine, seat flush with the bottom of the rail. Hold D in place, then nail or screw every flange hole (SD9112).`);
+  hanger('beamHanger', 'x', H - t / 2, -1, Lh - t / 2, Lh + t / 2, yR0, rh - 1);
+  hanger('beamHanger', 'x', H + t / 2, 1, Lh - t / 2, Lh + t / 2, yR0, rh - 1);
+
+  joint('joistHanger', 4, 'hanger', 'Joist (E) into rail/beam: 2×4 face-mount hanger (LUS24)',
+    `A hanger at both ends of every joist, with the seat ${fmt(jh)} below the rail top so the joist sits flush. A joist offcut makes a good gauge. Fill every hole (SD9112).`);
+  for (const x of joistX) {
+    hanger('joistHanger', 'z', t, 1, x - t / 2, x + t / 2, F - jh, 3.125);
+    hanger('joistHanger', 'z', Lh - t / 2, -1, x - t / 2, x + t / 2, F - jh, 3.125);
+    hanger('joistHanger', 'z', Lh + t / 2, 1, x - t / 2, x + t / 2, F - jh, 3.125);
+    hanger('joistHanger', 'z', L - t, -1, x - t / 2, x + t / 2, F - jh, 3.125);
+  }
+
+  // legs: 4 screws through every member face a leg touches, driven from the member's far side into the leg
+  const legF = [0.28, 0.68];
+  joint('leg', 3, 'struct', 'Rail/beam into leg (F)',
+    `4 per face the leg touches, driven from the far side of the rail or beam into the leg: 2 columns about ½″ in from the leg's edges, at ${legF.map((f) => fmt((F - yR0) * (1 - f))).reverse().join(' and ')} ${fromTop}. Near a hanger, move the column over to clear its flange.`);
+  const members = ['A', 'B', 'C', 'D'].flatMap((m) => defs[m].pieces.map((pc) => ({ m, b: pc.box })));
+  for (const lgp of defs.F.pieces) {
+    const Lb = lgp.box;
+    lgp.faces = 0;
+    for (const { b } of members) for (const ax of ['x', 'z']) {
+      const o = ax === 'x' ? 'z' : 'x';
+      const sgn = Math.abs(b[ax][1] - Lb[ax][0]) < 1e-6 ? 1 : Math.abs(b[ax][0] - Lb[ax][1]) < 1e-6 ? -1 : 0;
+      if (!sgn) continue;
+      const lo = Math.max(b[o][0], Lb[o][0]), hi = Math.min(b[o][1], Lb[o][1]);
+      if (hi - lo < 1) continue;
+      lgp.faces++;
+      const entry = sgn > 0 ? b[ax][0] : b[ax][1];
+      const ys = legF.map(rb);
+      const clear = [];
+      for (let c = lo + 0.5; c <= hi - 0.5 + 1e-9; c += 0.125) if (ys.every((y) => !onPlate(ax, entry, c, y))) clear.push(c);
+      if (!clear.length) continue;
+      const cols = clear[clear.length - 1] - clear[0] >= 1 ? [clear[0], clear[clear.length - 1]] : [clear[0]];
+      for (const c of cols) for (const y of ys) screw('leg', ax === 'x' ? [entry, y, c] : [c, y, entry], ax === 'x' ? [sgn, 0, 0] : [0, 0, sgn], 3);
+    }
+  }
+
   // G/H — plywood deck: two full-width sheets at the outside, a strip in the middle
   const stripW = W - 2 * seam;
   const plyName = p.ply === 0.75 ? '¾″ plywood' : '⅝″ plywood';
@@ -143,6 +231,20 @@ function design(p) {
   put('G', box(W - seam, W, F, D, 0, L), 4);
   def('H', 'Deck center strip', 'ply', stripW, `${fmt(stripW)} × ${fmt(L)}, lies over the spine.`, { dims: [stripW, L] });
   put('H', box(seam, W - seam, F, D, 0, L), 4);
+
+  joint('deck', 5, 'deck', 'Deck into frame',
+    `Every 8″ down the center line of every rail, beam and joist, starting 1½″ from each end. The two seam joists (${fmt(seam)} and ${fmt(W - seam)}) get a row on each side of the seam, ⅜″ in from each panel edge.`);
+  for (const m of ['A', 'B', 'C', 'D', 'E']) for (const pc of defs[m].pieces) {
+    const b = pc.box, alongX = b.x[1] - b.x[0] > b.z[1] - b.z[0];
+    const cx = (b.x[0] + b.x[1]) / 2, cz = (b.z[0] + b.z[1]) / 2;
+    const [a0, a1] = alongX ? b.x : b.z;
+    const n = Math.max(1, Math.round((a1 - a0 - 3) / 8));
+    const offs = m === 'E' && [seam, W - seam].some((sx) => Math.abs(cx - sx) < 0.01) ? [-0.375, 0.375] : [0];
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + 1.5 + (i * (a1 - a0 - 3)) / n;
+      for (const o of offs) screw('deck', alongX ? [a, D, cz + o] : [cx + o, D, a], [0, -1, 0], 1.625);
+    }
+  }
 
   // L/P — raised lip: 1× boards on the outside faces of the rails, standing proud of the deck
   let lipT = 0, lipBoard = null;
@@ -159,6 +261,26 @@ function design(p) {
     def('P', 'Lip, side', lipBoard, L, `${lb} screwed to the outside of the side rail, flush with the head and foot rails.`);
     put('P', box(-lipT, 0, bot, top, 0, L), 1);
     put('P', box(W, W + lipT, bot, top, 0, L), 1);
+
+    const ov = F - bot;
+    const ys = ov >= 1.6 ? [F - 0.55, bot + 0.55] : [(F + bot) / 2];
+    joint('lip', 6, 'trim', 'Lip (L/P) into rail',
+      `Pairs every 16″, starting 2″ from each end, ${ys.map((y) => fmt(top - y)).join(' and ')} down from the lip's top edge (that's into the rail, below the deck). Nudge a pair over if it lands on a structural screw head.`);
+    const heads = fast.filter((f) => f.type === 'struct');
+    const lipRun = (face, ax, dir, a0, a1, railFace) => {
+      const n = Math.max(1, Math.ceil((a1 - a0 - 4) / 16));
+      for (let i = 0; i <= n; i++) {
+        const base = a0 + 2 + (i * (a1 - a0 - 4)) / n;
+        const ni = ax === 'x' ? 0 : 2, ai = ax === 'x' ? 2 : 0;
+        const hit = (v) => heads.some((h) => Math.abs(h.p[ni] - railFace) < 0.01 && ys.some((y) => Math.hypot(h.p[ai] - v, h.p[1] - y) < 1));
+        const a = [base, base + 1.5, base - 1.5, base + 3].find((v) => !hit(v)) ?? base;
+        for (const y of ys) screw('lip', ax === 'x' ? [face, y, a] : [a, y, face], dir, 1.625);
+      }
+    };
+    lipRun(-lipT, 'z', [0, 0, 1], -lipT, W + lipT, 0);
+    lipRun(L + lipT, 'z', [0, 0, -1], -lipT, W + lipT, L);
+    lipRun(-lipT, 'x', [1, 0, 0], 0, L, 0);
+    lipRun(W + lipT, 'x', [-1, 0, 0], 0, L, W);
   }
 
   // S/T/U — dog step: a small plywood box, freestanding against the bed
@@ -182,6 +304,22 @@ function design(p) {
     def('U', 'Step end / divider', 'ply', endD, `${fmt(endD)} × ${fmt(inner)}. Two ends plus one center divider, between the front and back.`, { dims: [endD, inner] });
     for (const u of [0, sW / 2 - pt / 2, sW - pt]) put('U', toWorld(u, u + pt, 0, inner, pt, sD - pt), 0);
     step = { h: sH, w: sW, d: sD, loc: p.stepLoc };
+
+    const pnt = (u, y, v) => { const b = toWorld(u, u, y, y, v, v); return [b.x[0], y, b.z[0]]; };
+    const dirW = (du, dv) => (p.stepLoc === 'left' ? [-dv, 0, du] : p.stepLoc === 'right' ? [dv, 0, du] : [du, 0, dv]);
+    const uCenters = [pt / 2, sW / 2, sW - pt / 2];
+    joint('stepTop', 8, 'step', 'Step top (S) into front/back and ends',
+      `Glue first. Then screw every 6″ or so along the front and back, and 3 into each end and the divider, ${fmt(pt / 2)} in from the edge so each one lands centered on the piece below.`);
+    const nA = Math.max(1, Math.ceil((sW - 3) / 6));
+    for (let i = 0; i <= nA; i++) for (const v of [pt / 2, sD - pt / 2]) screw('stepTop', pnt(1.5 + (i * (sW - 3)) / nA, sH, v), [0, -1, 0], 1.625);
+    for (const u of uCenters) for (const f of [0.25, 0.5, 0.75]) screw('stepTop', pnt(u, sH, pt + (sD - 2 * pt) * f), [0, -1, 0], 1.625);
+    const sy = [0.2, 0.5, 0.8];
+    joint('stepBox', 8, 'step', 'Step front/back (T) into ends and divider (U)',
+      `Glue, then 3 per joint through the front and back into each end and the divider: centered on it, at ${sy.map((f) => fmt(inner * f)).join(', ')} up from the bottom.`);
+    for (const u of uCenters) for (const f of sy) {
+      screw('stepBox', pnt(u, inner * f, 0), dirW(0, 1), 1.625);
+      screw('stepBox', pnt(u, inner * f, sD), dirW(0, -1), 1.625);
+    }
   }
 
   const mattresses = [
@@ -228,28 +366,23 @@ function design(p) {
 
   // hardware
   const legs = defs.F.pieces;
-  const legFaces = legs.reduce((a, l) => a + l.faces, 0);
-  const buttJoints = 4 /* side rails */ + 2 /* spine */ + 2 /* mid beam at side rails */;
-  const joistCount = defs.E.pieces.length;
-  const supportRun = 2 * W + 2 * L + L + W + joistCount * jLen; // lines under the deck
   const hw = [
-    { id: 'screw3', item: '3″ structural wood screws', spec: 'e.g. GRK RSS or Spax PowerLag, ¼″ × 3″', qty: legFaces * 4 + buttJoints * 3,
+    { id: 'screw3', item: '3″ structural wood screws', spec: 'e.g. GRK RSS or Spax PowerLag, ¼″ × 3″', qty: fast.filter((f) => f.type === 'struct').length,
       note: '4 per leg face, 3 per butt joint' },
-    { id: 'hanger24', item: '2×4 face-mount joist hangers', spec: 'Simpson LUS24 or LU24', qty: joistCount * 2, note: 'Both ends of each joist' },
+    { id: 'hanger24', item: '2×4 face-mount joist hangers', spec: 'Simpson LUS24 or LU24', qty: joints.joistHanger.count, note: 'Both ends of each joist' },
     { id: 'hangerBig', item: `${p.rail.replace('x', '×')} face-mount joist hangers`, spec: `Simpson LUS${p.rail.replace('2x', '2')}`, qty: 2,
       note: 'Mid-beam halves where they meet the spine' },
-    { id: 'sd9', item: 'Connector screws for hangers', spec: 'Simpson SD9112 (#9 × 1½″)', qty: joistCount * 2 * 6 + 2 * 10,
+    { id: 'sd9', item: 'Connector screws for hangers', spec: 'Simpson SD9112 (#9 × 1½″)', qty: joints.joistHanger.count * 6 + joints.beamHanger.count * 10,
       note: 'About 6 per 2×4 hanger and 10 per large hanger' },
-    { id: 'deck', item: '1⅝″ construction screws', spec: 'for the plywood deck', qty: Math.ceil(supportRun / 8),
+    { id: 'deck', item: '1⅝″ construction screws', spec: 'for the plywood deck', qty: joints.deck.count,
       note: 'Every 8″ along every member under the deck' },
     { id: 'pad', item: 'Felt or rubber furniture pads', spec: '3½″ square', qty: legs.length, note: 'One per leg' },
   ];
-  if (lipBoard) hw.push({ id: 'trim', item: '1⅝″ trim-head screws', spec: 'for the lip boards', qty: 2 * Math.ceil((2 * (W + 2 * lipT) + 2 * L) / 16),
+  if (lipBoard) hw.push({ id: 'trim', item: '1⅝″ trim-head screws', spec: 'for the lip boards', qty: joints.lip.count,
     note: 'Two every 16″ into the rails, below the deck line' });
   if (step) {
-    const joints = Math.ceil((2 * (step.w + step.d) + step.d) / 6) + 3 * 2 * 3;
     hw.push(
-      { id: 'stepScrew', item: '1¼″ screws', spec: 'for the step box', qty: joints, note: 'Every 6″ through the top, 3 per end/divider joint' },
+      { id: 'stepScrew', item: '1⅝″ construction screws', spec: 'for the step box (same screws as the deck)', qty: joints.stepTop.count + joints.stepBox.count, note: 'Every 6″ through the top, 3 per end/divider joint' },
       { id: 'glue', item: 'Wood glue', spec: '8 oz bottle', qty: 1, note: 'Glue every step joint too. The step stays assembled' },
       { id: 'tread', item: 'Non-slip carpet stair tread', spec: `at least ${fmt(step.w)} × ${fmt(step.d)}`, qty: 1, note: 'Traction for paws. Glue or staple it on' },
       { id: 'stepPad', item: 'Rubber non-slip pads', spec: 'for the step feet', qty: 4, note: 'Keeps the step from skating when the dog launches' },
@@ -264,7 +397,7 @@ function design(p) {
 
   return { p, W, L, H, Lh, D, F, rh, yR0, t, defs, joistX, leftX, mattresses, boards, sheets, hw, warnings,
     plyName, legs, floorGap: yR0, diag: Math.hypot(W, L), gx, lipT, lipBoard, step, bounds,
-    OW: W + 2 * lipT, OL: L + 2 * lipT };
+    OW: W + 2 * lipT, OL: L + 2 * lipT, fast, hangers, joints };
 }
 
 // Guillotine-nest one piece into the free rectangles of existing sheets (either rotation).
@@ -424,7 +557,26 @@ function renderSteps(d) {
   if (d.lipBoard) steps.push(['Add the lip.', `Screw the side lips (P) to the outside faces of the side rails, with the top edge ${fmt(d.p.lip)} above the deck. Then run the head and foot lips (L) across the ends so they cover the ends of P. Put two trim screws every 16″, going into the rail below the deck line. Round over or sand the top edges, since that edge is right at shin height.`]);
   steps.push(['Mattresses on.', `Set the two queens side by side. There's ${fmt(d.p.clear)} of deck showing around them${d.lipBoard ? ', inside the lip' : ''}. Add a bed bridge and connector strap across the seam, then check the top height, which should be about ${fmt(d.p.target)} before it settles.`]);
   if (d.step) steps.push(['Build the dog step.', `Glue and screw the front and back (T) to the two ends and the center divider (U), then glue and screw the top (S) on. Round every edge, glue on the carpet tread, stick the rubber pads underneath, and set it ${where[d.step.loc]}. It's ${fmt(d.step.h)} high, so the dog makes two jumps of about ${fmt(d.step.h)} each instead of one ${fmt(d.p.target)} jump.`]);
-  $('#stepList').innerHTML = steps.map(([h, b]) => `<li><strong>${h}</strong>${b}</li>`).join('');
+  const stageOf = { 'Build the perimeter upside down.': 1, 'Add the spine and mid beam.': 2, 'Stand the legs in.': 3, 'Hang the joists.': 4,
+    'Lay the deck.': 5, 'Add the lip.': 6, 'Mattresses on.': 7, 'Build the dog step.': 8 };
+  stageList = [];
+  $('#stepList').innerHTML = steps.map(([h, b]) => {
+    const st = stageOf[h];
+    if (!st) return `<li><strong>${h}</strong>${b}</li>`;
+    stageList.push({ stage: st, title: h.replace(/\.$/, '') });
+    const js = Object.values(d.joints).filter((j) => j.stage === st && j.count);
+    const fx = js.length ? `<ul class="fx">${js.map((j) => `<li><i style="background:${FASTENER_TYPES[j.type].color}"></i><b>${esc(j.title)}</b>
+      <span class="n">× ${j.count}</span> <button class="zoom" data-joint="${j.key}">Zoom to one</button><div>${esc(j.where)}</div></li>`).join('')}</ul>` : '';
+    return `<li><strong>${h}</strong>${b}${fx}<button class="show3d" data-stage="${st}">Show in 3D</button></li>`;
+  }).join('');
+  $('#stepList').querySelectorAll('.zoom').forEach((btn) => btn.addEventListener('click', () => {
+    focusJoint(btn.dataset.joint);
+    $('#render').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  $('#stepList').querySelectorAll('.show3d').forEach((btn) => btn.addEventListener('click', () => {
+    setStage(+btn.dataset.stage);
+    $('#render').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
 }
 
 // ---------- SVG drawings ----------
@@ -583,6 +735,9 @@ function drawPly(d) {
 let renderer, scene, persp, ortho, camera, controls, root, floor, grid, dirLight;
 let explodeT = 0, explodeCur = 0, currentView = 'iso', cur = null;
 const mats = {}, pickables = [];
+let stage = null, stageList = [];
+let fxGeo = null;
+const fxMats = {};
 const EXPLODE = [0, 12, 24, 38, 58, 82];
 
 function init3d() {
@@ -632,7 +787,11 @@ function init3d() {
 
 function build3d(d) {
   cur = d;
-  for (const m of pickables) { m.geometry.dispose(); m.children.forEach((c) => c.geometry.dispose()); }
+  for (const m of pickables) {
+    if (!m.userData.shared) m.geometry.dispose();
+    m.children.forEach((c) => c.geometry.dispose());
+    if (m.isInstancedMesh) m.dispose();
+  }
   root.clear();
   pickables.length = 0;
   const edgeMat = new THREE.LineBasicMaterial({ color: 0x2e1f12, transparent: true, opacity: 0.4 });
@@ -643,7 +802,7 @@ function build3d(d) {
     const cy = (b.y[0] + b.y[1]) / 2;
     mesh.position.set((b.x[0] + b.x[1]) / 2 - d.W / 2, cy, (b.z[0] + b.z[1]) / 2 - d.L / 2);
     mesh.castShadow = true; mesh.receiveShadow = true;
-    mesh.userData = { mark, baseY: cy, ex: EXPLODE[ex], info, group: opts.group || mark };
+    mesh.userData = { mark, baseY: cy, ex: EXPLODE[ex], info, group: opts.group || mark, stage: STAGE_OF[mark] ?? 0 };
     if (!opts.noEdges) mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), edgeMat));
     root.add(mesh);
     pickables.push(mesh);
@@ -658,14 +817,122 @@ function build3d(d) {
     const b = { x: [m.x[0] + 0.25, m.x[1] - 0.25], y: m.y, z: m.z };
     add(b, 'M', 5, `Queen mattress · 60″ × 80″ × ${fmt(d.p.mattT)}`, { group: 'M' });
   }
+  buildFasteners(d);
   applyToggles();
   setView(currentView, true);
 }
 
 function applyToggles() {
   const show = { M: $('#tMatt').checked, G: $('#tPly').checked, S: $('#tStep').checked };
-  for (const m of pickables) if (m.userData.group in show) m.visible = show[m.userData.group];
-  explodeT = $('#tExplode').checked ? 1 : 0;
+  const exploded = $('#tExplode').checked, showFx = $('#tFast').checked, xray = $('#tXray').checked;
+  explodeT = exploded ? 1 : 0;
+  for (const m of pickables) {
+    const u = m.userData;
+    let vis = u.fx ? showFx && !exploded : u.group in show ? show[u.group] : true;
+    if (stage != null) vis = u.fx ? u.stage === stage && !exploded : u.stage <= stage;
+    m.visible = vis;
+  }
+  // earlier stages fade back so the parts going on now stand out; X-ray fades all the wood
+  for (const [mark, mat] of Object.entries(mats)) {
+    const ghost = xray || (stage != null && (STAGE_OF[mark] ?? 0) < stage);
+    mat.transparent = ghost;
+    mat.opacity = ghost ? (xray ? 0.3 : 0.2) : 1;
+    mat.depthWrite = !ghost;
+    mat.needsUpdate = true;
+  }
+  updateStepper();
+}
+
+function setStage(st) {
+  stage = st;
+  if (st != null) { $('#tExplode').checked = false; }
+  applyToggles();
+  if (st != null && currentView !== 'iso' && currentView !== 'under') setView('iso');
+}
+
+function updateStepper() {
+  const i = stageList.findIndex((x) => x.stage === stage);
+  $('#stPrev').disabled = stage == null || i <= 0;
+  $('#stNext').disabled = stage != null && i >= stageList.length - 1;
+  $('#stAll').textContent = stage == null ? 'Step through the build' : 'Show finished bed';
+  $('#stAll').classList.toggle('on', stage != null);
+  if (stage == null || !cur) {
+    $('#stCap').innerHTML = 'Step through the build to see what goes on in each step, and where every screw and hanger goes. You can also turn on <b>Fasteners</b> for the finished bed.';
+    return;
+  }
+  const js = Object.values(cur.joints).filter((j) => j.stage === stage && j.count);
+  $('#stCap').innerHTML = `<b>Step ${i + 1} of ${stageList.length}: ${esc(stageList[i].title)}.</b> ` +
+    (js.length ? js.map((j) => `<button class="fxk" data-joint="${j.key}" title="Zoom to one"><i style="background:${FASTENER_TYPES[j.type].color}"></i>${esc(j.title)} × ${j.count}</button>`).join(' ')
+      : 'No fasteners in this step.') +
+    ' <span class="note">Click a fastener to zoom to one. Fasteners are drawn slightly oversize. The model is shown right side up, but the frame is built upside down.</span>';
+  $('#stCap').querySelectorAll('.fxk').forEach((b) => b.addEventListener('click', () => focusJoint(b.dataset.joint)));
+}
+
+// Fly the camera to one example of a joint, looking at it from the side its fasteners go in.
+function focusJoint(key) {
+  if (!cur || !renderer) return;
+  const j = cur.joints[key];
+  if (!j) return;
+  if (stage !== j.stage) setStage(j.stage);
+  setView('iso');
+  const off = new THREE.Vector3(-cur.W / 2, 0, -cur.L / 2);
+  const up = new THREE.Vector3(0, 1, 0);
+  const view = (tgt, from) => {
+    const lat = new THREE.Vector3().crossVectors(from, up);
+    if (lat.lengthSq() < 0.01) lat.set(1, 0, 1);
+    const pos = tgt.clone().addScaledVector(from.clone().normalize(), 26).addScaledVector(lat.normalize(), 12)
+      .add(new THREE.Vector3(0, from.y > 0.5 ? 6 : 14, 0));
+    return { tgt, pos };
+  };
+  const cands = [
+    ...cur.fast.filter((x) => x.key === key).map((f) => view(new THREE.Vector3(...f.p).add(off), new THREE.Vector3(...f.dir).multiplyScalar(-1))),
+    ...cur.hangers.filter((x) => x.key === key).map((h) => {
+      const b = h.boxes[1];
+      return view(new THREE.Vector3((b.x[0] + b.x[1]) / 2, (b.y[0] + b.y[1]) / 2, (b.z[0] + b.z[1]) / 2).add(off),
+        h.axis === 'x' ? new THREE.Vector3(h.sgn, 0, 0) : new THREE.Vector3(0, 0, h.sgn));
+    }),
+  ];
+  if (!cands.length) return;
+  // prefer the example whose camera ends up farthest outside the bed, so nothing blocks the view
+  const { tgt, pos } = cands.reduce((a, c) => (Math.hypot(c.pos.x, c.pos.z) > Math.hypot(a.pos.x, a.pos.z) ? c : a));
+  persp.position.copy(pos);
+  controls.target.copy(tgt);
+  controls.update();
+}
+
+function buildFasteners(d) {
+  fxGeo ||= { shaft: new THREE.CylinderGeometry(1, 1, 1, 8), head: new THREE.CylinderGeometry(1, 1, 1, 14) };
+  for (const [k, ft] of Object.entries(FASTENER_TYPES))
+    fxMats[k] ||= new THREE.MeshStandardMaterial({ color: ft.color, metalness: k === 'hanger' ? 0.7 : 0.35, roughness: k === 'hanger' ? 0.35 : 0.45 });
+  const Y = new THREE.Vector3(0, 1, 0), m4 = new THREE.Matrix4(), off = new THREE.Vector3(-d.W / 2, 0, -d.L / 2);
+  const groups = {};
+  for (const f of d.fast) (groups[`${f.type}|${f.stage}`] ||= []).push(f);
+  for (const list of Object.values(groups)) {
+    const ft = FASTENER_TYPES[list[0].type];
+    const mk = (geo) => {
+      const im = new THREE.InstancedMesh(geo, fxMats[list[0].type], list.length);
+      im.userData = { fx: true, shared: true, stage: list[0].stage, baseY: 0, ex: 0, infos: list.map((f) => f.info) };
+      root.add(im); pickables.push(im);
+      return im;
+    };
+    const shafts = mk(fxGeo.shaft), heads = mk(fxGeo.head);
+    list.forEach((f, i) => {
+      const dir = new THREE.Vector3(...f.dir), q = new THREE.Quaternion().setFromUnitVectors(Y, dir);
+      const p0 = new THREE.Vector3(...f.p).add(off);
+      m4.compose(p0.clone().addScaledVector(dir, f.len / 2), q, new THREE.Vector3(ft.r, f.len, ft.r));
+      shafts.setMatrixAt(i, m4);
+      m4.compose(p0.clone().addScaledVector(dir, -0.04), q, new THREE.Vector3(ft.head, 0.09, ft.head));
+      heads.setMatrixAt(i, m4);
+    });
+  }
+  for (const h of d.hangers) for (const b of h.boxes) {
+    const g = new THREE.BoxGeometry(b.x[1] - b.x[0], b.y[1] - b.y[0], b.z[1] - b.z[0]);
+    const mesh = new THREE.Mesh(g, fxMats.hanger);
+    const cy = (b.y[0] + b.y[1]) / 2;
+    mesh.position.set((b.x[0] + b.x[1]) / 2 - d.W / 2, cy, (b.z[0] + b.z[1]) / 2 - d.L / 2);
+    mesh.userData = { fx: true, stage: h.stage, baseY: cy, ex: 0, info: `${FASTENER_TYPES.hanger.label} · ${h.info}` };
+    root.add(mesh); pickables.push(mesh);
+  }
 }
 
 function viewExtents(v, d) {
@@ -731,10 +998,11 @@ function setupPicking() {
     const r = el.getBoundingClientRect();
     ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ptr, camera);
-    const hit = ray.intersectObjects(pickables.filter((m) => m.visible), false)[0];
+    const hit = ray.intersectObjects(pickables.filter((m) => m.visible && !(m.material.transparent && !m.userData.fx)), false)[0];
     const mark = hit?.object.userData.mark || null;
     if (hit) {
-      tip.textContent = hit.object.userData.info;
+      const u = hit.object.userData;
+      tip.textContent = u.infos ? u.infos[hit.instanceId] : u.info;
       tip.style.opacity = 1;
       const x = Math.min(e.clientX - r.left + 14, r.width - tip.offsetWidth - 6);
       tip.style.left = `${Math.max(6, x)}px`; tip.style.top = `${e.clientY - r.top + 14}px`;
@@ -755,18 +1023,24 @@ function renderAll() {
   renderCuts(d);
   renderBuy(d);
   renderSteps(d);
+  if (stage != null && !stageList.some((x) => x.stage === stage)) stage = null;
   drawStack(d);
   drawPlan(d);
   drawPly(d);
   if (renderer) build3d(d);
 }
 
-$('#legend').innerHTML = GROUP_LABELS.map(([m, l]) => `<span><i style="background:${COLORS[m]}"></i>${l}</span>`).join('');
+$('#legend').innerHTML = GROUP_LABELS.map(([m, l]) => `<span><i style="background:${COLORS[m]}"></i>${l}</span>`).join('')
+  + Object.values(FASTENER_TYPES).map((f) => `<span class="lfx"><i style="background:${f.color};border-radius:50%"></i>${f.label}</span>`).join('');
 ['#mattT', '#target', '#clear', '#rail', '#spacing', '#ply', '#lip', '#stepOn', '#stepH', '#stepW', '#stepD', '#stepLoc']
   .forEach((id) => $(id).addEventListener('input', renderAll));
-['#tMatt', '#tPly', '#tStep'].forEach((id) => $(id).addEventListener('change', applyToggles));
+['#tMatt', '#tPly', '#tStep', '#tFast', '#tXray'].forEach((id) => $(id).addEventListener('change', applyToggles));
 $('#tExplode').addEventListener('change', () => { applyToggles(); setView(currentView); });
 document.querySelectorAll('#views button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+$('#stAll').addEventListener('click', () => setStage(stage == null ? stageList[0]?.stage ?? null : null));
+const stepBy = (k) => { const i = stageList.findIndex((x) => x.stage === stage); const n = stageList[i + k]; if (n) setStage(n.stage); };
+$('#stPrev').addEventListener('click', () => stepBy(-1));
+$('#stNext').addEventListener('click', () => (stage == null ? setStage(stageList[0]?.stage) : stepBy(1)));
 
 try { init3d(); } catch (e) {
   $('#viewer').insertAdjacentHTML('beforeend', '<div class="warn" style="margin:16px">3D view unavailable in this browser (WebGL failed to start). The drawings below still apply.</div>');
