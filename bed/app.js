@@ -7,7 +7,11 @@ const $ = (s) => document.querySelector(s);
 const LUMBER = {
   '2x4': { t: 1.5, w: 3.5 }, '2x6': { t: 1.5, w: 5.5 }, '2x8': { t: 1.5, w: 7.25 },
   '2x10': { t: 1.5, w: 9.25 }, '4x4': { t: 3.5, w: 3.5 },
+  '1x4': { t: 0.75, w: 3.5 }, '1x6': { t: 0.75, w: 5.5 }, '1x8': { t: 0.75, w: 7.25 },
 };
+const LIP_BOARDS = ['1x4', '1x6', '1x8'];
+const LIP_OVERLAP = 2; // how much of the lip board must lap onto the rail for screws
+const STEP_GAP = 0.25; // gap between the step and the bed
 const STOCK_LENGTHS = { '2x4': [96, 120, 144], '4x4': [96, 120, 144], default: [96, 120, 144, 192] };
 const KERF = 0.125;
 const SHEET = { w: 48, l: 96 };
@@ -16,15 +20,18 @@ const QUEEN = { w: 60, l: 80 };
 const COLORS = {
   A: '#c7874a', B: '#d49a5c', C: '#9c5a26', D: '#b06d34', E: '#e2b46e', F: '#6e4020',
   G: '#e9d2a2', H: '#dcc08a', M: '#c9d4e0',
+  L: '#7d5234', P: '#8c5f3c', S: '#c89f6c', T: '#b48a58', U: '#a07a4c',
 };
+const GROUP_OF = { H: 'G', P: 'L', T: 'S', U: 'S' };
 const GROUP_LABELS = [
   ['A', 'Head/foot rails'], ['B', 'Side rails'], ['C', 'Center spine'], ['D', 'Mid beam'],
-  ['E', 'Joists'], ['F', 'Legs'], ['G', 'Plywood'], ['M', 'Mattresses'],
+  ['E', 'Joists'], ['F', 'Legs'], ['G', 'Plywood'], ['L', 'Lip'], ['S', 'Dog step'], ['M', 'Mattresses'],
 ];
 const DEFAULT_PRICES = { // rough per-linear-foot / per-unit placeholders
-  '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6,
+  '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6, '1x4': 0.9, '1x6': 1.4, '1x8': 1.9,
   'ply0.75': 62, 'ply0.625': 52,
   screw3: 0.25, hanger24: 1.4, hangerBig: 2.6, sd9: 0.12, deck: 0.06, pad: 0.75,
+  trim: 0.1, stepScrew: 0.05, glue: 6, tread: 14, stepPad: 0.5,
 };
 
 // ---------- formatting ----------
@@ -49,8 +56,11 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 function readParams() {
   const num = (id, d) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : d; };
   return {
-    mattT: num('#mattT', 10), target: num('#target', 24), clear: Math.max(0, num('#clear', 0.5)),
+    mattT: num('#mattT', 11), target: num('#target', 24), clear: Math.max(0, num('#clear', 0.5)),
     rail: $('#rail').value, spacing: parseFloat($('#spacing').value), ply: parseFloat($('#ply').value),
+    lip: Math.max(0, num('#lip', 2)),
+    step: $('#stepOn').checked, stepH: num('#stepH', 12), stepW: num('#stepW', 36), stepD: num('#stepD', 14),
+    stepLoc: $('#stepLoc').value,
   };
 }
 
@@ -134,6 +144,46 @@ function design(p) {
   def('H', 'Deck center strip', 'ply', stripW, `${fmt(stripW)} × ${fmt(L)}, lies over the spine.`, { dims: [stripW, L] });
   put('H', box(seam, W - seam, F, D, 0, L), 4);
 
+  // L/P — raised lip: 1× boards on the outside faces of the rails, standing proud of the deck
+  let lipT = 0, lipBoard = null;
+  if (p.lip > 0) {
+    const need = p.ply + p.lip + LIP_OVERLAP;
+    lipBoard = LIP_BOARDS.find((b) => LUMBER[b].w >= need) || LIP_BOARDS[LIP_BOARDS.length - 1];
+    if (LUMBER[lipBoard].w < need) warnings.push(`A ${fmt(p.lip)} lip is taller than a 1×8 can cover and still lap ${fmt(LIP_OVERLAP)} onto the rail. Lower the lip height.`);
+    lipT = LUMBER[lipBoard].t;
+    const top = D + p.lip, bot = top - LUMBER[lipBoard].w;
+    const lb = lipBoard.replace('x', '×');
+    def('L', 'Lip, head / foot', lipBoard, W + 2 * lipT, `Overlaps the ends of the side lips. Top edge sits ${fmt(p.lip)} above the deck.`);
+    put('L', box(-lipT, W + lipT, bot, top, -lipT, 0), 1);
+    put('L', box(-lipT, W + lipT, bot, top, L, L + lipT), 1);
+    def('P', 'Lip, side', lipBoard, L, `${lb} screwed to the outside of the side rail, flush with the head and foot rails.`);
+    put('P', box(-lipT, 0, bot, top, 0, L), 1);
+    put('P', box(W, W + lipT, bot, top, 0, L), 1);
+  }
+
+  // S/T/U — dog step: a small plywood box, freestanding against the bed
+  let step = null;
+  if (p.step) {
+    const sH = p.stepH, sW = p.stepW, sD = p.stepD, pt = p.ply;
+    if (sH < 6 || sH > p.target - 6) warnings.push(`A ${fmt(sH)} step is awkward with a ${fmt(p.target)} bed. Something near half the bed height (${fmt(p.target / 2)}) splits the jump evenly.`);
+    if (sD < 2 * pt + 4 || sW < 3 * pt + 8) warnings.push('The step is too small to build as a box.');
+    const off = lipT + STEP_GAP;
+    const toWorld = (u0, u1, y0, y1, v0, v1) => {
+      if (p.stepLoc === 'left') return box(-off - v1, -off - v0, y0, y1, L / 2 - sW / 2 + u0, L / 2 - sW / 2 + u1);
+      if (p.stepLoc === 'right') return box(W + off + v0, W + off + v1, y0, y1, L / 2 - sW / 2 + u0, L / 2 - sW / 2 + u1);
+      return box(W / 2 - sW / 2 + u0, W / 2 - sW / 2 + u1, y0, y1, L + off + v0, L + off + v1);
+    };
+    const inner = sH - pt, endD = sD - 2 * pt;
+    def('S', 'Step top', 'ply', sW, `${fmt(sW)} × ${fmt(sD)}. Cover it with a non-slip carpet tread.`, { dims: [sW, sD] });
+    put('S', toWorld(0, sW, inner, sH, 0, sD), 0);
+    def('T', 'Step front / back', 'ply', sW, `${fmt(sW)} × ${fmt(inner)}. Runs the full width under the top.`, { dims: [sW, inner] });
+    put('T', toWorld(0, sW, 0, inner, 0, pt), 0);
+    put('T', toWorld(0, sW, 0, inner, sD - pt, sD), 0);
+    def('U', 'Step end / divider', 'ply', endD, `${fmt(endD)} × ${fmt(inner)}. Two ends plus one center divider, between the front and back.`, { dims: [endD, inner] });
+    for (const u of [0, sW / 2 - pt / 2, sW - pt]) put('U', toWorld(u, u + pt, 0, inner, pt, sD - pt), 0);
+    step = { h: sH, w: sW, d: sD, loc: p.stepLoc };
+  }
+
   const mattresses = [
     box(p.clear, p.clear + QUEEN.w, D, D + p.mattT, p.clear, p.clear + QUEEN.l),
     box(p.clear + QUEEN.w, p.clear + 2 * QUEEN.w, D, D + p.mattT, p.clear, p.clear + QUEEN.l),
@@ -148,15 +198,31 @@ function design(p) {
   const boards = {};
   for (const [stock, cuts] of Object.entries(lumberCuts)) boards[stock] = pack(cuts, STOCK_LENGTHS[stock] || STOCK_LENGTHS.default);
 
-  // plywood packing (pieces are full-length strips across the sheet width)
-  const plyPieces = [];
-  for (const m of ['G', 'H']) for (const _ of defs[m].pieces) plyPieces.push({ mark: m, w: defs[m].dims[0], l: L });
-  plyPieces.sort((a, b) => b.w - a.w);
+  // plywood: deck pieces are full-length strips across each sheet; the step is nested into the offcuts
   const sheets = [];
-  for (const pc of plyPieces) {
-    let s = sheets.find((s) => s.rem >= pc.w);
-    if (!s) { s = { pieces: [], rem: SHEET.w }; sheets.push(s); }
-    s.pieces.push(pc); s.rem -= pc.w + KERF;
+  const deckPieces = [];
+  for (const m of ['G', 'H']) for (const _ of defs[m].pieces) deckPieces.push({ mark: m, w: defs[m].dims[0], l: L });
+  deckPieces.sort((a, b) => b.w - a.w);
+  for (const pc of deckPieces) {
+    let s = sheets.find((s) => s.used + pc.w <= SHEET.w + 1e-9);
+    if (!s) { s = { pieces: [], used: 0 }; sheets.push(s); }
+    s.pieces.push({ ...pc, x: s.used, y: 0 });
+    s.used += pc.w + KERF;
+  }
+  for (const s of sheets) {
+    s.free = [
+      { x: s.used, y: 0, w: SHEET.w - s.used, h: SHEET.l },
+      { x: 0, y: L + KERF, w: Math.min(s.used, SHEET.w), h: SHEET.l - L - KERF },
+    ].filter((f) => f.w > 0.5 && f.h > 0.5);
+  }
+  const extra = [];
+  for (const m of ['S', 'T', 'U']) if (defs[m]) for (const _ of defs[m].pieces) extra.push({ mark: m, w: defs[m].dims[0], l: defs[m].dims[1] });
+  extra.sort((a, b) => b.w * b.l - a.w * a.l);
+  for (const pc of extra) {
+    if (!nest(sheets, pc)) {
+      sheets.push({ pieces: [], used: 0, free: [{ x: 0, y: 0, w: SHEET.w, h: SHEET.l }] });
+      if (!nest(sheets, pc)) warnings.push(`Step piece ${pc.mark} is bigger than a 4×8 sheet.`);
+    }
   }
   if (L > SHEET.l) warnings.push('The deck is longer than a 96″ sheet, so the plywood layout needs an extra seam.');
 
@@ -178,9 +244,46 @@ function design(p) {
       note: 'Every 8″ along every member under the deck' },
     { id: 'pad', item: 'Felt or rubber furniture pads', spec: '3½″ square', qty: legs.length, note: 'One per leg' },
   ];
+  if (lipBoard) hw.push({ id: 'trim', item: '1⅝″ trim-head screws', spec: 'for the lip boards', qty: 2 * Math.ceil((2 * (W + 2 * lipT) + 2 * L) / 16),
+    note: 'Two every 16″ into the rails, below the deck line' });
+  if (step) {
+    const joints = Math.ceil((2 * (step.w + step.d) + step.d) / 6) + 3 * 2 * 3;
+    hw.push(
+      { id: 'stepScrew', item: '1¼″ screws', spec: 'for the step box', qty: joints, note: 'Every 6″ through the top, 3 per end/divider joint' },
+      { id: 'glue', item: 'Wood glue', spec: '8 oz bottle', qty: 1, note: 'Glue every step joint too. The step stays assembled' },
+      { id: 'tread', item: 'Non-slip carpet stair tread', spec: `at least ${fmt(step.w)} × ${fmt(step.d)}`, qty: 1, note: 'Traction for paws. Glue or staple it on' },
+      { id: 'stepPad', item: 'Rubber non-slip pads', spec: 'for the step feet', qty: 4, note: 'Keeps the step from skating when the dog launches' },
+    );
+  }
+
+  const all = Object.values(defs).flatMap((d) => d.pieces.map((pc) => pc.box));
+  const bounds = {
+    x: [Math.min(...all.map((b) => b.x[0])), Math.max(...all.map((b) => b.x[1]))],
+    z: [Math.min(...all.map((b) => b.z[0])), Math.max(...all.map((b) => b.z[1]))],
+  };
 
   return { p, W, L, H, Lh, D, F, rh, yR0, t, defs, joistX, leftX, mattresses, boards, sheets, hw, warnings,
-    plyName, legs, floorGap: yR0, diag: Math.hypot(W, L), gx };
+    plyName, legs, floorGap: yR0, diag: Math.hypot(W, L), gx, lipT, lipBoard, step, bounds,
+    OW: W + 2 * lipT, OL: L + 2 * lipT };
+}
+
+// Guillotine-nest one piece into the free rectangles of existing sheets (either rotation).
+function nest(sheets, pc) {
+  for (const s of sheets) {
+    for (let i = 0; i < s.free.length; i++) {
+      const r = s.free[i];
+      for (const [w, h] of [[pc.w, pc.l], [pc.l, pc.w]]) {
+        if (w > r.w + 1e-9 || h > r.h + 1e-9) continue;
+        s.pieces.push({ ...pc, x: r.x, y: r.y, w, l: h });
+        s.free.splice(i, 1,
+          { x: r.x + w + KERF, y: r.y, w: r.w - w - KERF, h },
+          { x: r.x, y: r.y + h + KERF, w: r.w, h: r.h - h - KERF });
+        s.free = s.free.filter((f) => f.w > 0.5 && f.h > 0.5);
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function pack(cuts, stocks) {
@@ -217,7 +320,8 @@ function renderStats(d, cost) {
   const boards = Object.values(d.boards).reduce((a, b) => a + b.length, 0);
   const items = [
     [fmt(d.p.target), 'Mattress top'], [fmt(d.D), 'Deck height'],
-    [`${fmt(d.W)} × ${fmt(d.L)}`, 'Footprint'], [fmt(d.floorGap), 'Under-rail clearance'],
+    [`${fmt(d.OW)} × ${fmt(d.OL)}`, 'Footprint'], [fmt(d.floorGap), 'Under-rail clearance'],
+    ...(d.step ? [[fmt(d.step.h), 'Dog step']] : []),
     [`${boards} + ${d.sheets.length}`, 'Boards + sheets'], [`~$${Math.round(cost)}`, 'Materials (rough)'],
   ];
   $('#stats').innerHTML = items.map(([v, k]) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
@@ -245,10 +349,11 @@ function buyRows(d) {
     const byLen = {};
     boards.forEach((b) => (byLen[b.len] = (byLen[b.len] || 0) + 1));
     for (const [len, qty] of Object.entries(byLen))
-      rows.push({ key: stock, item: `${stock.replace('x', '×')} lumber`, size: ftIn(+len), qty, unit: +len / 12, unitLabel: '/ft' });
+      rows.push({ key: stock, item: `${stock.replace('x', '×')} ${stock[0] === '1' ? 'board' : 'lumber'}`, size: ftIn(+len), qty, unit: +len / 12, unitLabel: '/ft',
+        note: stock === d.lipBoard ? 'For the lip. It\'s the visible face, so choose straight, clear select pine or poplar.' : '' });
   }
   rows.push({ key: `ply${d.p.ply}`, item: `${d.plyName} sheet`, size: '4′ × 8′', qty: d.sheets.length, unit: 1, unitLabel: '/sheet',
-    note: 'Sanded pine or birch ply (BC or better) keeps splinters out of the mattress cover.' });
+    note: `Sanded pine or birch ply (BC or better) keeps splinters out of the mattress cover.${d.step ? ' The step is cut from the deck offcuts.' : ''}` });
   for (const h of d.hw) rows.push({ key: h.id, item: h.item, size: h.spec, qty: h.qty, unit: 1, unitLabel: '/ea', hw: true, note: h.note });
   return rows;
 }
@@ -304,17 +409,21 @@ function renderBuy(d) {
 
 function renderSteps(d) {
   const r = d.p.rail.replace('x', '×');
+  const lb = d.lipBoard?.replace('x', '×');
+  const where = { foot: 'centered against the foot of the bed', left: 'against the left side, halfway along', right: 'against the right side, halfway along' };
   const steps = [
     ['Confirm the numbers.', `Measure the mattress thickness and both queen mattresses (they're usually 60″ × 80″, but check). Enter the thickness above. With ${fmt(d.p.mattT)}, the deck top has to sit at ${fmt(d.D)}.`],
-    ['Cut and label.', `Cut every piece on the cut list and write its letter on it. Check that the cuts on each pair or set match exactly: A, B, C, D, all ${d.defs.E.pieces.length} E joists and all ${d.legs.length} legs. Ease the edges and sand any faces you'll see. Stain or seal the outside rails now if you want a finish.`],
+    ['Cut and label.', `Cut every piece on the cut list and write its letter on it. Check that the cuts on each pair or set match exactly: A, B, C, D, all ${d.defs.E.pieces.length} E joists and all ${d.legs.length} legs.${d.step ? ' Cut the step pieces (S, T, U) from the plywood offcuts, following the sheet diagram.' : ''} Ease the edges and sand any faces you'll see.${lb ? ` Stain or seal the ${lb} lip boards now if you want a finish.` : ''}`],
     ['Build the perimeter upside down.', `In the bedroom, lay the four ${r} rails top-edge-down on a flat floor, with the head and foot rails (A) overlapping the ends of the side rails (B). Screw through A into B, three screws per joint. Because the frame is upside down, the floor keeps every top edge flush.`],
     ['Add the spine and mid beam.', `Center the spine (C) ${fmt(d.H)} from the outside edge and screw through A into its ends. Mark mid-length (${fmt(d.Lh)}). Screw each mid-beam half (D) through the side rail, then hang its other end on the spine with a ${r} hanger.`],
     ['Stand the legs in.', `Still upside down, set each 4×4 leg (F) into its spot with its end on the floor, so the top stays flush. Put one in each corner, one beside the spine at the head and at the foot, one beside the mid beam on each side rail, one at the center crossing, and one under each mid-beam half about ${fmt(d.gx)} from the side. Screw 4 screws through each face it touches.`],
     ['Hang the joists.', `Nail up the 2×4 hangers so the joist tops sit flush with the rails. Joist centers from the left edge: ${d.leftX.map(fmt).join(', ')}, then mirror them from the right edge. The joists at ${fmt(48)} and ${fmt(d.W - 48)} carry the plywood seams, so place those two carefully.`],
     ['Flip, square, level.', `Turn the frame over (you'll want two people). Measure both diagonals, which should each be about ${fmt(d.diag)}, and push the frame until they match. Check for level and shim any leg that rocks. Stick a pad under each leg.`],
     ['Lay the deck.', `Put the two 48″ panels (G) on the outside edges and the ${fmt(d.W - 96)} strip (H) in the middle. Drive 1⅝″ screws every 8″ into every member underneath.`],
-    ['Mattresses on.', `Set the two queens side by side. There's ${fmt(d.p.clear)} of deck showing around them. Add a bed bridge and connector strap across the seam, then check the top height, which should be about ${fmt(d.p.target)} before it settles.`],
   ];
+  if (d.lipBoard) steps.push(['Add the lip.', `Screw the side lips (P) to the outside faces of the side rails, with the top edge ${fmt(d.p.lip)} above the deck. Then run the head and foot lips (L) across the ends so they cover the ends of P. Put two trim screws every 16″, going into the rail below the deck line. Round over or sand the top edges, since that edge is right at shin height.`]);
+  steps.push(['Mattresses on.', `Set the two queens side by side. There's ${fmt(d.p.clear)} of deck showing around them${d.lipBoard ? ', inside the lip' : ''}. Add a bed bridge and connector strap across the seam, then check the top height, which should be about ${fmt(d.p.target)} before it settles.`]);
+  if (d.step) steps.push(['Build the dog step.', `Glue and screw the front and back (T) to the two ends and the center divider (U), then glue and screw the top (S) on. Round every edge, glue on the carpet tread, stick the rubber pads underneath, and set it ${where[d.step.loc]}. It's ${fmt(d.step.h)} high, so the dog makes two jumps of about ${fmt(d.step.h)} each instead of one ${fmt(d.p.target)} jump.`]);
   $('#stepList').innerHTML = steps.map(([h, b]) => `<li><strong>${h}</strong>${b}</li>`).join('');
 }
 
@@ -333,72 +442,102 @@ function dimV(x, y0, y1, label, side = 1, tick = 5) {
     <text class="dimtxt" x="${tx}" y="${(y0 + y1) / 2 + 4}" text-anchor="${side > 0 ? 'start' : 'end'}">${label}</text>`;
 }
 
+function stepBox(d) {
+  const bs = ['S', 'T', 'U'].flatMap((m) => d.defs[m]?.pieces.map((p) => p.box) || []);
+  if (!bs.length) return null;
+  return {
+    x: [Math.min(...bs.map((b) => b.x[0])), Math.max(...bs.map((b) => b.x[1]))],
+    z: [Math.min(...bs.map((b) => b.z[0])), Math.max(...bs.map((b) => b.z[1]))],
+  };
+}
+
 function drawStack(d) {
-  const s = 4.4, top = d.p.target, mx = Math.max(29, top + 2);
+  const s = 4.4, top = d.p.target, mx = Math.max(29, top + d.p.lip + 2);
   const Hh = mx * s + 70, floorY = mx * s + 34;
   const Y = (inch) => floorY - inch * s;
-  const bx = 250, X = (inch) => bx + inch * s;
+  const bars = [['Now', 29], ['On floor', 19], ['New', top]];
+  if (d.step) bars.push(['Step', d.step.h]);
+  const bx = 40 + bars.length * 70, minX = d.bounds.x[0], maxX = d.bounds.x[1];
+  const X = (inch) => bx + (inch - minX) * s;
   let g = '';
-  // comparison bars
-  const bars = [['Now', 29, '#9a8f82'], ['On floor', 19, '#9a8f82'], ['New', top, COLORS.C]];
-  bars.forEach(([lbl, h, c], i) => {
-    const x = 20 + i * 70;
-    g += `<rect x="${x}" y="${Y(h)}" width="44" height="${h * s}" rx="4" fill="${c}" opacity="${i === 2 ? 1 : .55}"/>`;
+  bars.forEach(([lbl, h], i) => {
+    const x = 20 + i * 70, c = i === 2 ? COLORS.C : i === 3 ? COLORS.S : '#9a8f82';
+    g += `<rect x="${x}" y="${Y(h)}" width="44" height="${h * s}" rx="4" fill="${c}" opacity="${i >= 2 ? 1 : .55}"/>`;
     g += `<text x="${x + 22}" y="${Y(h) - 6}" text-anchor="middle" class="mono" font-size="13" font-weight="600">${fmt(h)}</text>`;
     g += `<text x="${x + 22}" y="${floorY + 18}" text-anchor="middle" font-size="12">${lbl}</text>`;
   });
   // legs visible below the foot rail (back legs lighter)
   for (const l of d.legs) {
     const front = l.box.z[1] > d.L - 6;
-    g += rect(X(l.box.x[0]), Y(d.yR0), l.box.x[1] * s - l.box.x[0] * s, d.yR0 * s, COLORS.F, `opacity="${front ? 1 : .45}"`);
+    g += rect(X(l.box.x[0]), Y(d.yR0), (l.box.x[1] - l.box.x[0]) * s, d.yR0 * s, COLORS.F, `opacity="${front ? 1 : .45}"`);
   }
   g += rect(X(0), Y(d.F), d.W * s, (d.F - d.yR0) * s, COLORS.A);
-  g += `<text x="${X(d.W / 2)}" y="${Y((d.F + d.yR0) / 2) + 4}" text-anchor="middle" font-size="12" font-weight="600">A · foot rail (${d.p.rail.replace('x', '×')})</text>`;
   g += rect(X(0), Y(d.D), d.W * s, (d.D - d.F) * s, COLORS.G);
   for (const m of d.mattresses) g += `<rect x="${X(m.x[0]) + 1}" y="${Y(m.y[1])}" width="${(m.x[1] - m.x[0]) * s - 2}" height="${(m.y[1] - m.y[0]) * s}" rx="8" fill="${COLORS.M}" style="${SVG_INK}stroke-width:.8"/>`;
   g += `<text x="${X(d.W / 4)}" y="${Y(d.D + d.p.mattT / 2) + 4}" text-anchor="middle" font-size="12">Queen</text><text x="${X(3 * d.W / 4)}" y="${Y(d.D + d.p.mattT / 2) + 4}" text-anchor="middle" font-size="12">Queen</text>`;
-  g += `<line x1="${X(-4)}" y1="${Y(top)}" x2="${X(d.W + 4)}" y2="${Y(top)}" stroke="${COLORS.C}" stroke-dasharray="5 4" stroke-width="1.5"/>`;
-  g += `<line x1="10" y1="${floorY}" x2="${X(d.W) + 290}" y2="${floorY}" style="${SVG_INK}stroke-width:1.5"/>`;
+  const labelX = d.step?.loc === 'foot' ? (d.W / 2 - d.step.w / 2) / 2 : d.W / 2; // keep labels clear of a foot step
+  const railLabelY = d.lipBoard ? (d.defs.L.pieces[0].box.y[0] + d.yR0) / 2 : (d.F + d.yR0) / 2;
+  if (d.lipBoard) {
+    const lb = d.defs.L.pieces[0].box;
+    g += rect(X(lb.x[0]), Y(lb.y[1]), (lb.x[1] - lb.x[0]) * s, (lb.y[1] - lb.y[0]) * s, COLORS.L);
+    g += `<text x="${X(labelX)}" y="${Y((lb.y[0] + lb.y[1]) / 2) + 4}" text-anchor="middle" font-size="11" font-weight="600" style="fill:#fff">L · lip (${d.lipBoard.replace('x', '×')})</text>`;
+  }
+  g += `<text x="${X(labelX)}" y="${Y(railLabelY) + 4}" text-anchor="middle" font-size="12" font-weight="600">A · foot rail (${d.p.rail.replace('x', '×')})</text>`;
+  const sb = stepBox(d);
+  if (sb) {
+    const h = d.step.h, pt = d.p.ply;
+    g += rect(X(sb.x[0]), Y(h - pt), (sb.x[1] - sb.x[0]) * s, (h - pt) * s, COLORS.T);
+    g += rect(X(sb.x[0]), Y(h), (sb.x[1] - sb.x[0]) * s, pt * s, COLORS.S);
+    g += `<text x="${X((sb.x[0] + sb.x[1]) / 2)}" y="${Y(h / 2) + 4}" text-anchor="middle" font-size="11" font-weight="600" style="fill:#fff">Step ${fmt(h)}</text>`;
+  }
+  g += `<line x1="${X(minX - 4)}" y1="${Y(top)}" x2="${X(maxX + 4)}" y2="${Y(top)}" stroke="${COLORS.C}" stroke-dasharray="5 4" stroke-width="1.5"/>`;
+  g += `<line x1="10" y1="${floorY}" x2="${X(maxX) + 290}" y2="${floorY}" style="${SVG_INK}stroke-width:1.5"/>`;
   // dims on the right
-  const dx = X(d.W) + 24;
+  const dx = X(maxX) + 24;
   if (d.yR0 > 0) g += dimV(dx, Y(d.yR0), Y(0), `${fmt(d.yR0)} clear`);
   g += dimV(dx, Y(d.F), Y(d.yR0), `${fmt(d.F - d.yR0)} rail`);
   g += dimV(dx + 110, Y(d.D), Y(0), `${fmt(d.D)} deck`);
+  if (d.lipBoard) g += dimV(dx + 110, Y(d.D + d.p.lip), Y(d.D), `${fmt(d.p.lip)} lip`);
   g += dimV(dx, Y(top), Y(d.D), `${fmt(d.p.mattT)} mattress`);
   g += dimV(dx + 200, Y(top), Y(0), `${fmt(top)} top`);
-  const vbW = X(d.W) + 300;
+  const vbW = X(maxX) + 300;
   $('#svgStack').innerHTML = `<svg viewBox="0 0 ${vbW} ${Hh}" role="img" aria-label="Height stack elevation">${g}</svg>`;
 }
 
 function drawPlan(d) {
-  const s = 7, mL = 70, mT = 74;
-  const X = (x) => mL + x * s, Z = (z) => mT + z * s;
+  const s = 7, mL = 80, mT = 100, minX = d.bounds.x[0], maxX = d.bounds.x[1], minZ = d.bounds.z[0], maxZ = d.bounds.z[1];
+  const X = (x) => mL + (x - minX) * s, Z = (z) => mT + (z - minZ) * s;
   let g = '';
   const r2 = (b, c, op = 1) => rect(X(b.x[0]), Z(b.z[0]), (b.x[1] - b.x[0]) * s, (b.z[1] - b.z[0]) * s, c, `opacity="${op}"`);
   g += `<rect x="${X(0)}" y="${Z(0)}" width="${d.W * s}" height="${d.L * s}" fill="none" style="stroke:var(--line)"/>`;
-  for (const m of ['E', 'D', 'C', 'B', 'A']) for (const pc of d.defs[m].pieces) g += r2(pc.box, COLORS[m]);
+  for (const m of ['E', 'D', 'C', 'B', 'A', 'P', 'L']) for (const pc of d.defs[m]?.pieces || []) g += r2(pc.box, COLORS[m]);
   for (const pc of d.defs.F.pieces) g += r2(pc.box, COLORS.F, 0.9);
+  for (const pc of d.defs.S?.pieces || []) g += r2(pc.box, COLORS.S);
   // plywood seam lines
   for (const x of [48, d.W - 48]) g += `<line x1="${X(x)}" y1="${Z(0) - 8}" x2="${X(x)}" y2="${Z(d.L) + 8}" stroke="${COLORS.C}" stroke-dasharray="6 5" stroke-width="1.2"/>`;
   // labels
   const lab = (x, z, m) => `<circle cx="${X(x)}" cy="${Z(z)}" r="11" fill="${COLORS[m]}" style="${SVG_INK}stroke-width:.8"/><text x="${X(x)}" y="${Z(z) + 4.5}" text-anchor="middle" font-size="12" font-weight="700" fill="#fff" style="fill:#fff">${m}</text>`;
   g += lab(d.W / 4, 0.75, 'A') + lab(d.W / 4, d.L - 0.75, 'A') + lab(0.75, d.L / 4, 'B') + lab(d.W - 0.75, d.L / 4, 'B');
   g += lab(d.H, d.L / 4, 'C') + lab(d.W * 0.36, d.Lh, 'D') + lab(d.joistX[1], d.L * 0.18, 'E') + lab(3.25, 3.25, 'F');
-  g += `<text x="${X(d.W / 2)}" y="${Z(0) - 44}" text-anchor="middle" font-size="12" font-weight="600">HEAD</text>`;
-  g += `<text x="${X(d.W / 2)}" y="${Z(d.L) + 50}" text-anchor="middle" font-size="12" font-weight="600">FOOT</text>`;
-  g += dimH(X(0), X(d.W), Z(0) - 16, fmt(d.W));
-  g += dimV(X(0) - 18, Z(0), Z(d.L), fmt(d.L), -1);
-  g += dimV(X(d.W) + 18, Z(0), Z(d.Lh), `${fmt(d.Lh)} to beam ℄`);
-  // joist centers along the bottom
-  const yb = Z(d.L) + 22;
-  let prev = 0;
-  for (const x of [...d.leftX, d.H]) {
-    g += dimH(X(prev), X(x), yb, fmt(x - prev), 4);
-    prev = x;
+  if (d.lipBoard) g += lab(d.W * 0.8, d.L + d.lipT / 2, 'L') + lab(d.W + d.lipT / 2, d.L * 0.8, 'P');
+  const sb = stepBox(d);
+  if (sb) {
+    const cx = (sb.x[0] + sb.x[1]) / 2, cz = (sb.z[0] + sb.z[1]) / 2;
+    g += lab(cx, cz, 'S');
+    g += `<text x="${X(cx)}" y="${Z(cz) + 26}" text-anchor="middle" font-size="11" font-weight="600">Dog step</text>`;
   }
-  g += `<text class="dimtxt" x="${X(d.H) + 10}" y="${yb + 4}">← joist centers (mirror on the right)</text>`;
+  // top: head label, overall width, joist centers
+  const yj = Z(minZ) - 14, yw = Z(minZ) - 44;
+  g += `<text x="${X(d.W / 2)}" y="${Z(minZ) - 72}" text-anchor="middle" font-size="12" font-weight="600">HEAD</text>`;
+  g += dimH(X(0), X(d.W), yw, d.lipBoard ? `${fmt(d.W)} frame · ${fmt(d.OW)} over lip` : fmt(d.W));
+  let prev = 0;
+  for (const x of [...d.leftX, d.H]) { g += dimH(X(prev), X(x), yj, fmt(x - prev), 4); prev = x; }
+  g += `<text class="dimtxt" x="${X(d.H) + 10}" y="${yj + 4}">← joist centers (mirror on the right)</text>`;
+  g += dimV(X(minX) - 18, Z(0), Z(d.L), fmt(d.L), -1);
+  g += dimV(X(maxX) + 18, Z(0), Z(d.Lh), `${fmt(d.Lh)} to beam ℄`);
   g += `<text class="dimtxt" x="${X(48)}" y="${Z(0) + 20}" text-anchor="middle" style="fill:${COLORS.C}">seam</text><text class="dimtxt" x="${X(d.W - 48)}" y="${Z(0) + 20}" text-anchor="middle" style="fill:${COLORS.C}">seam</text>`;
-  const vbW = X(d.W) + 170, vbH = Z(d.L) + 64;
+  g += `<text x="${X(d.W / 2)}" y="${Z(maxZ) + 30}" text-anchor="middle" font-size="12" font-weight="600">FOOT</text>`;
+  const vbW = X(maxX) + 170, vbH = Z(maxZ) + 46;
   $('#svgPlan').innerHTML = `<svg viewBox="0 0 ${vbW} ${vbH}" role="img" aria-label="Frame plan view">${g}</svg>`;
 }
 
@@ -422,17 +561,21 @@ function drawPly(d) {
   d.sheets.forEach((sh, i) => {
     const x0 = sx0 + i * (SHEET.w * ss + 22), y0 = deckY;
     g += `<rect x="${x0}" y="${y0}" width="${SHEET.w * ss}" height="${SHEET.l * ss}" fill="url(#hatch)" style="${SVG_INK}stroke-width:.8"/>`;
-    let cx = 0;
     for (const pc of sh.pieces) {
-      g += rect(x0 + cx * ss, y0, pc.w * ss, pc.l * ss, COLORS[pc.mark]);
-      g += `<text x="${x0 + (cx + pc.w / 2) * ss}" y="${y0 + (pc.l / 2) * ss}" text-anchor="middle" font-size="13" font-weight="700">${pc.mark}</text>`;
-      g += `<text x="${x0 + (cx + pc.w / 2) * ss}" y="${y0 + (pc.l / 2) * ss + 15}" text-anchor="middle" class="dimtxt">${fmt(pc.w)}×${fmt(pc.l)}</text>`;
-      cx += pc.w + KERF;
+      const px = x0 + pc.x * ss, py = y0 + pc.y * ss, pw = pc.w * ss, ph = pc.l * ss;
+      g += rect(px, py, pw, ph, COLORS[pc.mark]);
+      const big = pw > 64 && ph > 34;
+      g += `<text x="${px + pw / 2}" y="${py + ph / 2 + (big ? 0 : 4.5)}" text-anchor="middle" font-size="13" font-weight="700">${pc.mark}</text>`;
+      if (big) g += `<text x="${px + pw / 2}" y="${py + ph / 2 + 15}" text-anchor="middle" class="dimtxt">${fmt(pc.w)}×${fmt(pc.l)}</text>`;
     }
     g += `<text x="${x0 + (SHEET.w / 2) * ss}" y="${y0 + SHEET.l * ss + 18}" text-anchor="middle" class="dimtxt">Sheet ${i + 1}</text>`;
   });
   const vbW = sx0 + d.sheets.length * (SHEET.w * ss + 22) + 10;
-  const vbH = deckY + Math.max(d.L * s + 34, SHEET.l * ss + 30);
+  let vbH = deckY + Math.max(d.L * s + 34, SHEET.l * ss + 30);
+  if (d.step) {
+    g += `<text class="dimtxt" x="${sx0}" y="${vbH + 4}">S, T, U = dog step pieces (sizes in the cut list)</text>`;
+    vbH += 16;
+  }
   $('#svgPly').innerHTML = `<svg viewBox="0 0 ${vbW} ${vbH}" role="img" aria-label="Plywood layout">${g}</svg>`;
 }
 
@@ -508,7 +651,7 @@ function build3d(d) {
   for (const x of Object.values(d.defs)) {
     const len = x.dims ? `${fmt(x.dims[0])} × ${fmt(x.dims[1])}` : fmt(x.len);
     const stock = x.stock === 'ply' ? d.plyName : x.stock.replace('x', '×');
-    for (const pc of x.pieces) add(pc.box, x.mark, pc.ex, `${x.mark} · ${x.name} · ${stock} @ ${len}`, { group: x.mark === 'H' ? 'G' : x.mark });
+    for (const pc of x.pieces) add(pc.box, x.mark, pc.ex, `${x.mark} · ${x.name} · ${stock} @ ${len}`, { group: GROUP_OF[x.mark] || x.mark });
   }
   mats.M ||= new THREE.MeshStandardMaterial({ color: COLORS.M, roughness: 0.95 });
   for (const m of d.mattresses) {
@@ -520,19 +663,19 @@ function build3d(d) {
 }
 
 function applyToggles() {
-  const showM = $('#tMatt').checked, showP = $('#tPly').checked;
-  for (const m of pickables) {
-    if (m.userData.group === 'M') m.visible = showM;
-    if (m.userData.group === 'G') m.visible = showP;
-  }
+  const show = { M: $('#tMatt').checked, G: $('#tPly').checked, S: $('#tStep').checked };
+  for (const m of pickables) if (m.userData.group in show) m.visible = show[m.userData.group];
   explodeT = $('#tExplode').checked ? 1 : 0;
 }
 
 function viewExtents(v, d) {
   const top = d.p.target + ($('#tExplode').checked ? EXPLODE[5] : 0);
-  if (v === 'top') return [d.W, d.L];
-  if (v === 'front') return [d.W, top];
-  if (v === 'side') return [d.L, top];
+  // the camera looks at the middle of the bed, so size the view for whichever side reaches farthest
+  const span = (r, mid) => 2 * Math.max(mid - r[0], r[1] - mid);
+  const sx = span(d.bounds.x, d.W / 2), sz = span(d.bounds.z, d.L / 2);
+  if (v === 'top') return [sx, sz];
+  if (v === 'front') return [sx, top];
+  if (v === 'side') return [sz, top];
   return null;
 }
 
@@ -619,8 +762,9 @@ function renderAll() {
 }
 
 $('#legend').innerHTML = GROUP_LABELS.map(([m, l]) => `<span><i style="background:${COLORS[m]}"></i>${l}</span>`).join('');
-['#mattT', '#target', '#clear', '#rail', '#spacing', '#ply'].forEach((id) => $(id).addEventListener('input', renderAll));
-['#tMatt', '#tPly'].forEach((id) => $(id).addEventListener('change', applyToggles));
+['#mattT', '#target', '#clear', '#rail', '#spacing', '#ply', '#lip', '#stepOn', '#stepH', '#stepW', '#stepD', '#stepLoc']
+  .forEach((id) => $(id).addEventListener('input', renderAll));
+['#tMatt', '#tPly', '#tStep'].forEach((id) => $(id).addEventListener('change', applyToggles));
 $('#tExplode').addEventListener('change', () => { applyToggles(); setView(currentView); });
 document.querySelectorAll('#views button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 

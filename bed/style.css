@@ -54,7 +54,7 @@ h3 { font-size: 15px; margin: 22px 0 10px; }
 h3 .sub { color: var(--muted); font-weight: 400; }
 
 .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 18px; }
-.controls label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+.controls label { display: flex; flex-direction: column; justify-content: space-between; gap: 6px; font-size: 13px; font-weight: 600; }
 .hint { font-weight: 400; color: var(--muted); }
 .num { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; }
 .num input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: 600 16px var(--mono); padding: 8px 10px; }
@@ -113,3 +113,7 @@ footer { color: var(--muted); font-size: 13px; text-align: center; padding: 10px
   .board { grid-template-columns: 80px 1fr; }
   .hero { padding: 36px 0 28px; }
 }
+.controls label.check { justify-content: flex-end; }
+.controls label.check span { display: flex; align-items: center; gap: 8px; font-size: 15px; padding: 8px 0; }
+.controls label.check input { accent-color: var(--accent); width: 18px; height: 18px; }
+#params h3 { margin-top: 22px; }
