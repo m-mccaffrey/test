@@ -41,7 +41,7 @@ const GROUP_LABELS = [
 const DEFAULT_PRICES = { // rough per-linear-foot / per-unit placeholders
   '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6, '1x4': 0.9, '1x6': 1.4, '1x8': 1.9, '5/4x4': 1.6, '5/4x6': 2.4, '5/4x8': 3.2,
   'ply0.75': 62, 'ply0.625': 52,
-  screw3: 0.08, screw25: 0.08, '2x2': 0.45, deck: 0.06, pad: 0.75,
+  screw3: 0.12, screw25: 0.08, '2x2': 0.45, deck: 0.06, pad: 0.75,
   trim: 0.1, pan: 0.1, stepScrew: 0.05, glue: 6, tread: 14, stepPad: 0.5,
 };
 
