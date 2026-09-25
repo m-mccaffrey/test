@@ -529,6 +529,14 @@ function renderCuts(d) {
   });
 }
 
+const HD_SEARCH = {
+  // no slashes: an encoded "/" in the URL path isn't reliably handled, so fractions are left to the item name
+  screw3: 'GRK RSS structural screws 3 in', hanger24: 'Simpson LUS24', sd9: 'Simpson SD9112',
+  deck: '#9 construction screws', pad: 'felt furniture pads', trim: '#8 trim head screws',
+  stepScrew: '#9 construction screws', glue: 'wood glue', tread: 'carpet stair tread', stepPad: 'rubber non slip furniture pads',
+};
+const hdLink = (term) => `https://www.homedepot.com/s/${encodeURIComponent(term)}`;
+
 function buyRows(d) {
   const rows = [];
   for (const [stock, boards] of Object.entries(d.boards)) {
@@ -536,22 +544,26 @@ function buyRows(d) {
     boards.forEach((b) => (byLen[b.len] = (byLen[b.len] || 0) + 1));
     for (const [len, qty] of Object.entries(byLen))
       rows.push({ key: stock, item: `${stock.replace('x', '×')} ${stock[0] === '1' ? 'board' : 'lumber'}`, size: ftIn(+len), qty, unit: +len / 12, unitLabel: '/ft',
+        search: stock[0] === '1' ? `${stock}x${len / 12} select pine board` : `${stock}x${len / 12} lumber`,
         note: stock === d.lipBoard ? 'For the lip. It\'s the visible face, so choose straight, clear select pine or poplar.' : '' });
   }
   rows.push({ key: `ply${d.p.ply}`, item: `${d.plyName} sheet`, size: '4′ × 8′', qty: d.sheets.length, unit: 1, unitLabel: '/sheet',
+    search: 'sanded plywood 4x8',
     note: `Sanded pine or birch ply (BC or better) keeps splinters out of the mattress cover.${d.step ? ' The step is cut from the deck offcuts.' : ''}` });
-  for (const h of d.hw) rows.push({ key: h.id, item: h.item, size: h.spec, qty: h.qty, unit: 1, unitLabel: '/ea', hw: true, note: h.note });
+  for (const h of d.hw) rows.push({ key: h.id, item: h.item, size: h.spec, qty: h.qty, unit: 1, unitLabel: '/ea', hw: true, note: h.note,
+    search: h.id === 'hangerBig' ? `Simpson LUS${d.p.rail.replace('2x', '2')}` : HD_SEARCH[h.id] });
   return rows;
 }
 
 function renderBuy(d) {
   const rows = buyRows(d);
   const lumber = rows.filter((r) => !r.hw), hw = rows.filter((r) => r.hw);
-  const row = (r, i) => `<tr><td>${esc(r.item)}${r.note && !r.hw ? `<div class="note">${esc(r.note)}</div>` : ''}</td><td class="n">${esc(r.size)}</td>
+  const shop = (r) => (r.search ? ` <a class="shop" href="${hdLink(r.search)}" target="_blank" rel="noopener" title="Search Home Depot for “${esc(r.search)}”">Home Depot ↗</a>` : '');
+  const row = (r, i) => `<tr><td>${esc(r.item)}${shop(r)}${r.note && !r.hw ? `<div class="note">${esc(r.note)}</div>` : ''}</td><td class="n">${esc(r.size)}</td>
     <td class="n">${r.qty}</td>
     <td class="n"><input class="price" type="number" step="0.01" min="0" data-key="${r.key}" value="${prices[r.key] ?? 0}"> <span class="note">${r.unitLabel}</span></td>
     <td class="n" data-sub="${i}"></td></tr>`;
-  const hwRow = (r, i) => `<tr><td>${esc(r.item)}<div class="note">${esc(r.size)}</div></td><td class="n">${r.qty}</td><td class="note">${esc(r.note)}</td>
+  const hwRow = (r, i) => `<tr><td>${esc(r.item)}${shop(r)}<div class="note">${esc(r.size)}</div></td><td class="n">${r.qty}</td><td class="note">${esc(r.note)}</td>
     <td class="n"><input class="price" type="number" step="0.01" min="0" data-key="${r.key}" value="${prices[r.key] ?? 0}"> <span class="note">/ea</span></td>
     <td class="n" data-sub="${i}"></td></tr>`;
   $('#buyTable').innerHTML = `<thead><tr><th>Item</th><th>Size</th><th>Qty</th><th>Unit price</th><th>Subtotal</th></tr></thead>
