@@ -27,7 +27,7 @@ const GROUP_OF = { H: 'G', P: 'L', T: 'S', U: 'S' };
 // build step (stage) each part is installed in
 const STAGE_OF = { A: 1, B: 1, D: 2, F: 3, J: 4, C: 5, E: 5, G: 6, H: 6, L: 7, P: 7, M: 8, S: 9, T: 9, U: 9 };
 const FASTENER_TYPES = {
-  struct: { color: '#e8b400', r: 0.17, head: 0.5, label: '3″ structural screw' },
+  struct: { color: '#e8b400', r: 0.15, head: 0.42, label: '3″ deck screw' },
   screw25: { color: '#d4553a', r: 0.12, head: 0.33, label: '2½″ construction screw' },
   deck: { color: '#2f7de1', r: 0.12, head: 0.36, label: '1⅝″ deck screw' },
   pan: { color: '#0e7c86', r: 0.11, head: 0.3, label: '2″ pan-head screw' },
@@ -41,7 +41,7 @@ const GROUP_LABELS = [
 const DEFAULT_PRICES = { // rough per-linear-foot / per-unit placeholders
   '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6, '1x4': 0.9, '1x6': 1.4, '1x8': 1.9, '5/4x4': 1.6, '5/4x6': 2.4, '5/4x8': 3.2,
   'ply0.75': 62, 'ply0.625': 52,
-  screw3: 0.25, screw25: 0.08, '2x2': 0.45, deck: 0.06, pad: 0.75,
+  screw3: 0.08, screw25: 0.08, '2x2': 0.45, deck: 0.06, pad: 0.75,
   trim: 0.1, pan: 0.1, stepScrew: 0.05, glue: 6, tread: 14, stepPad: 0.5,
 };
 
@@ -477,7 +477,7 @@ function design(p) {
   // hardware
   const legs = defs.F.pieces;
   const hw = [
-    { id: 'screw3', item: '3″ structural wood screws', spec: 'e.g. GRK RSS or Spax PowerLag, ¼″ × 3″', qty: fast.filter((f) => f.type === 'struct').length,
+    { id: 'screw3', item: '3″ deck / construction screws', spec: '#10 × 3″ exterior (Spax, Deckmate or similar), not drywall screws', qty: fast.filter((f) => f.type === 'struct').length,
       note: 'Butt joints and legs' },
     { id: 'screw25', item: '2½″ construction screws', spec: '#9 × 2½″, for the ledgers and toe-screwing the joists', qty: joints.ledger.count + joints.toe.count,
       note: 'Short enough to stop ½″ inside the rails' },
@@ -589,7 +589,7 @@ function renderCuts(d) {
 
 const HD_SEARCH = {
   // no slashes: an encoded "/" in the URL path isn't reliably handled, so fractions are left to the item name
-  screw3: 'GRK RSS structural screws 3 in', screw25: '#9 construction screws',
+  screw3: '#10 x 3 in deck screws', screw25: '#9 construction screws',
   deck: '#9 construction screws', pad: 'felt furniture pads', trim: '#8 trim head screws', pan: '#8 pan head wood screws 2 in',
   stepScrew: '#9 construction screws', glue: 'wood glue', tread: 'carpet stair tread', stepPad: 'rubber non slip furniture pads',
 };
