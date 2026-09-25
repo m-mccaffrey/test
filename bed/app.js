@@ -7,9 +7,10 @@ const $ = (s) => document.querySelector(s);
 const LUMBER = {
   '2x4': { t: 1.5, w: 3.5 }, '2x6': { t: 1.5, w: 5.5 }, '2x8': { t: 1.5, w: 7.25 },
   '2x10': { t: 1.5, w: 9.25 }, '4x4': { t: 3.5, w: 3.5 },
-  '2x2': { t: 1.5, w: 1.5 }, '1x4': { t: 0.75, w: 3.5 }, '1x6': { t: 0.75, w: 5.5 }, '1x8': { t: 0.75, w: 7.25 },
+  '2x2': { t: 1.5, w: 1.5 }, '5/4x4': { t: 1, w: 3.5 }, '5/4x6': { t: 1, w: 5.5 }, '5/4x8': { t: 1, w: 7.25 }, '1x4': { t: 0.75, w: 3.5 }, '1x6': { t: 0.75, w: 5.5 }, '1x8': { t: 0.75, w: 7.25 },
 };
 const LIP_BOARDS = ['1x4', '1x6', '1x8'];
+const LIP_BOARDS_HIDDEN = ['5/4x4', '5/4x6', '5/4x8']; // 1″ thick, so screws from inside get ½″ of bite with ½″ to spare
 const LIP_OVERLAP = 2; // how much of the lip board must lap onto the rail for screws
 const STEP_GAP = 0.25; // gap between the step and the bed
 const STOCK_LENGTHS = { '2x2': [96], '2x4': [96, 120, 144], '4x4': [96, 120, 144], default: [96, 120, 144, 192] };
@@ -29,6 +30,7 @@ const FASTENER_TYPES = {
   struct: { color: '#e8b400', r: 0.17, head: 0.5, label: '3″ structural screw' },
   screw25: { color: '#d4553a', r: 0.12, head: 0.33, label: '2½″ construction screw' },
   deck: { color: '#2f7de1', r: 0.12, head: 0.36, label: '1⅝″ deck screw' },
+  pan: { color: '#0e7c86', r: 0.11, head: 0.3, label: '2″ pan-head screw' },
   trim: { color: '#18a999', r: 0.11, head: 0.3, label: '1⅝″ trim-head screw' },
   step: { color: '#a557d6', r: 0.11, head: 0.32, label: '1⅝″ step screw' },
 };
@@ -37,10 +39,10 @@ const GROUP_LABELS = [
   ['E', 'Joists'], ['J', 'Ledgers'], ['F', 'Legs'], ['G', 'Plywood'], ['L', 'Lip'], ['S', 'Dog step'], ['M', 'Mattresses'],
 ];
 const DEFAULT_PRICES = { // rough per-linear-foot / per-unit placeholders
-  '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6, '1x4': 0.9, '1x6': 1.4, '1x8': 1.9,
+  '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6, '1x4': 0.9, '1x6': 1.4, '1x8': 1.9, '5/4x4': 1.6, '5/4x6': 2.4, '5/4x8': 3.2,
   'ply0.75': 62, 'ply0.625': 52,
   screw3: 0.25, screw25: 0.08, '2x2': 0.45, deck: 0.06, pad: 0.75,
-  trim: 0.1, stepScrew: 0.05, glue: 6, tread: 14, stepPad: 0.5,
+  trim: 0.1, pan: 0.1, stepScrew: 0.05, glue: 6, tread: 14, stepPad: 0.5,
 };
 
 // ---------- formatting ----------
@@ -67,7 +69,7 @@ function readParams() {
   return {
     mattT: num('#mattT', 11), target: num('#target', 24), clear: Math.max(0, num('#clear', 0.5)),
     rail: $('#rail').value, spacing: parseFloat($('#spacing').value), ply: parseFloat($('#ply').value),
-    lip: Math.max(0, num('#lip', 2)),
+    lip: Math.max(0, num('#lip', 2)), lipFix: $('#lipFix').value,
     step: $('#stepOn').checked, stepH: num('#stepH', 12), stepW: num('#stepW', 36), stepD: num('#stepD', 14),
     stepLoc: $('#stepLoc').value,
   };
@@ -280,15 +282,100 @@ function design(p) {
   }
 
   // G/H — plywood deck: two full-width sheets at the outside, a strip in the middle
-  const stripW = W - 2 * seam;
-  const plyName = p.ply === 0.75 ? '¾″ plywood' : '⅝″ plywood';
-  def('G', 'Deck panel', 'ply', seam, `${fmt(seam)} × ${fmt(L)}, one on each outside edge.`, { dims: [seam, L] });
-  put('G', box(0, seam, F, D, 0, L), 4);
-  put('G', box(W - seam, W, F, D, 0, L), 4);
-  def('H', 'Deck center strip', 'ply', stripW, `${fmt(stripW)} × ${fmt(L)}, lies over the spine.`, { dims: [stripW, L] });
-  put('H', box(seam, W - seam, F, D, 0, L), 4);
+  // Headboard, for later: keep a 3/8″ bolt path clear through the head rail into each head corner leg (and the
+  // leg beside the spine), at mid-rail height. Every fastener is placed to miss these, so bolts can go in any time.
+  const hbY = rb(0.5), hbX = [t + lg / 2, H + t / 2 + lg / 2, W - t - lg / 2];
+  const hidden = p.lip > 0 && p.lipFix === 'inside';
+  const lipT0 = p.lip > 0 ? LUMBER[(hidden ? LIP_BOARDS_HIDDEN : LIP_BOARDS)[0]].t : 0;
+  const reserved = hbX.map((x) => ({ key: 'headboard', p: [x, hbY, -lipT0 - 1.5], dir: [0, 0, 1], len: lipT0 + 1.5 + t + lg - 0.5, r: 0.19 }));
+  const clearOfReserved = (p0, dir, len, gap) => {
+    const q = p0.map((v, k) => v + dir[k] * len);
+    return reserved.every((r) => segDist(p0, q, r.p, tipOf(r)) > gap + 0.1);
+  };
+  const fitsAll = (p0, dir, len, self, gap = 0.35) => fits(p0, dir, len, self, gap) && clearOfReserved(p0, dir, len, gap);
 
-  joint('deck', 6, 'deck', 'Deck into frame',
+  // build order: an outside-screwed lip goes on after the deck; a lip screwed from inside has to go on first,
+  // while the rails' inside faces are still open, and then the deck drops in between the lips
+  const stDeck = hidden ? 7 : 6, stLip = hidden ? 6 : 7;
+  STAGE_OF.G = STAGE_OF.H = stDeck; STAGE_OF.L = STAGE_OF.P = stLip;
+
+  // G/H — plywood deck: two full-width sheets at the outside, a strip in the middle
+  const stripW = W - 2 * seam, ins = hidden ? 0.125 : 0; // ⅛″ undersize at the lips so the deck drops in
+  const plyName = p.ply === 0.75 ? '¾″ plywood' : '⅝″ plywood';
+  def('G', 'Deck panel', 'ply', seam - ins, `${fmt(seam - ins)} × ${fmt(L - 2 * ins)}, one on each outside edge.${ins ? ' Cut ⅛″ undersize on the outside edges so it drops in between the lips.' : ''}`, { dims: [seam - ins, L - 2 * ins] });
+  put('G', box(ins, seam, F, D, ins, L - ins), 4);
+  put('G', box(W - seam, W - ins, F, D, ins, L - ins), 4);
+  def('H', 'Deck center strip', 'ply', stripW, `${fmt(stripW)} × ${fmt(L - 2 * ins)}, lies over the spine.`, { dims: [stripW, L - 2 * ins] });
+  put('H', box(seam, W - seam, F, D, ins, L - ins), 4);
+
+  // L/P — raised lip on the outside faces of the rails, standing proud of the deck
+  let lipT = 0, lipBoard = null;
+  if (p.lip > 0) {
+    const need = p.ply + p.lip + LIP_OVERLAP, boards = hidden ? LIP_BOARDS_HIDDEN : LIP_BOARDS;
+    lipBoard = boards.find((b) => LUMBER[b].w >= need) || boards[boards.length - 1];
+    if (LUMBER[lipBoard].w < need) warnings.push(`A ${fmt(p.lip)} lip is taller than a ${lipBoard.replace('x', '×')} can cover and still lap ${fmt(LIP_OVERLAP)} onto the rail. Lower the lip height.`);
+    lipT = LUMBER[lipBoard].t;
+    const top = D + p.lip, bot = top - LUMBER[lipBoard].w;
+    const lb = lipBoard.replace('x', '×');
+    def('L', 'Lip, head / foot', lipBoard, W + 2 * lipT, `Overlaps the ends of the side lips. Top edge sits ${fmt(p.lip)} above the deck.`);
+    put('L', box(-lipT, W + lipT, bot, top, -lipT, 0), 1);
+    put('L', box(-lipT, W + lipT, bot, top, L, L + lipT), 1);
+    def('P', 'Lip, side', lipBoard, L, `${lb} on the outside of the side rail, flush with the head and foot rails.`);
+    put('P', box(-lipT, 0, bot, top, 0, L), 1);
+    put('P', box(W, W + lipT, bot, top, 0, L), 1);
+
+    const ov = F - bot;
+    const ys = ov >= 1.6 ? [F - 0.55, bot + 0.55] : [(F + bot) / 2];
+    if (!hidden) {
+      joint('lip', stLip, 'trim', 'Lip (L/P) into rail',
+        `Pairs every 16″, starting 2″ from each end, ${ys.map((y) => fmt(top - y)).join(' and ')} down from the lip's top edge (that's into the rail, below the deck). A pair moves over wherever it would hit a frame or ledger screw inside the rail.`);
+      const lipRun = (face, ax, dir, a0, a1) => {
+        const n = Math.max(1, Math.ceil((a1 - a0 - 4) / 16));
+        for (let i = 0; i <= n; i++) {
+          const base = a0 + 2 + (i * (a1 - a0 - 4)) / n;
+          const at = (v, y) => (ax === 'x' ? [face, y, v] : [v, y, face]);
+          const a = [0, 1, -1, 2, -2, 3, -3, 4, -4].map((d) => base + d)
+            .find((v) => v >= a0 + 1.5 && v <= a1 - 1.5 && ys.every((y) => fitsAll(at(v, y), dir, 1.625, null)));
+          if (a === undefined) continue;
+          for (const y of ys) screw('lip', ax === 'x' ? [face, y, a] : [a, y, face], dir, 1.625);
+        }
+      };
+      lipRun(-lipT, 'z', [0, 0, 1], -lipT, W + lipT);
+      lipRun(L + lipT, 'z', [0, 0, -1], -lipT, W + lipT);
+      lipRun(-lipT, 'x', [1, 0, 0], 0, L);
+      lipRun(W + lipT, 'x', [-1, 0, 0], 0, L);
+    } else {
+      // hidden: pan-head screws from the rails' inside faces out into the back of the lip. The head bears on the
+      // rail face, so each goes exactly (length − 1½″) into the lip: 2″ screws → ½″ in, ½″ short of the show face.
+      const panLen = t + lipT / 2;
+      joint('lip', stLip, 'pan', 'Rail into lip (L/P), from inside',
+        `From inside the frame, before the deck goes on: glue, clamp the lip with its top edge ${fmt(p.ply + p.lip)} above the rail top, then drive ${fmt(panLen)} pan-head screws through the rail into the back of the lip. Put them every 12″ in ${ys.length === 2 ? 'two rows' : 'one row'}, ${ys.map((y) => fmt(F - y)).join(' and ')} down from the rail top. Skip the legs, joist ends and mid-beam ends. The head seats on the rail, so each screw goes exactly ${fmt(panLen - t)} into the lip and stops ${fmt(lipT - (panLen - t))} short of its outside face.`);
+      // inside faces of the four rails: [plane, axis normal, direction outward, along-axis range]
+      const inner = [
+        { ax: 'z', plane: t, out: -1, r: [t, W - t] }, { ax: 'z', plane: L - t, out: 1, r: [t, W - t] },
+        { ax: 'x', plane: t, out: -1, r: [t, L - t] }, { ax: 'x', plane: W - t, out: 1, r: [t, L - t] },
+      ];
+      const parts = Object.values(defs).filter((d) => /^[BCDEFJ]/.test(d.mark)).flatMap((d) => d.pieces.map((pc) => pc.box));
+      for (const fc of inner) {
+        const o = fc.ax === 'x' ? 'z' : 'x';
+        // anything butting the inside face within the screw band blocks that stretch of it
+        const blocked = parts.filter((b) => Math.abs((fc.out < 0 ? b[fc.ax][0] : b[fc.ax][1]) - fc.plane) < 1e-6
+          && b.y[1] > Math.min(...ys) - 0.3 && b.y[0] < Math.max(...ys) + 0.3).map((b) => [b[o][0] - 0.5, b[o][1] + 0.5]);
+        const dir = fc.ax === 'x' ? [fc.out, 0, 0] : [0, 0, fc.out];
+        const n = Math.max(1, Math.ceil((fc.r[1] - fc.r[0] - 4) / 12));
+        for (let i = 0; i <= n; i++) {
+          const base = fc.r[0] + 2 + (i * (fc.r[1] - fc.r[0] - 4)) / n;
+          const at = (v, y) => (fc.ax === 'x' ? [fc.plane, y, v] : [v, y, fc.plane]);
+          const a = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5].map((d) => base + d)
+            .find((v) => v >= fc.r[0] + 0.75 && v <= fc.r[1] - 0.75 && blocked.every((bk) => v < bk[0] || v > bk[1])
+              && ys.every((y) => fitsAll(at(v, y), dir, panLen, null)));
+          if (a !== undefined) for (const y of ys) screw('lip', at(a, y), dir, panLen);
+        }
+      }
+    }
+  }
+
+  joint('deck', stDeck, 'deck', 'Deck into frame',
     `Every 8″ down the center line of every rail, beam and joist, starting 1½″ from each end, moving a screw over where it would hit a frame screw below. The two seam joists (${fmt(seam)} and ${fmt(W - seam)}) get a row on each side of the seam, ⅜″ in from each panel edge.`);
   for (const m of ['A', 'B', 'C', 'D', 'E']) for (const pc of defs[m].pieces) {
     const b = pc.box, alongX = b.x[1] - b.x[0] > b.z[1] - b.z[0];
@@ -300,47 +387,10 @@ function design(p) {
       const a = a0 + 1.5 + (i * (a1 - a0 - 3)) / n;
       for (const o of offs) {
         const at = (v) => (alongX ? [v, D, cz + o] : [cx + o, D, v]);
-        const v = [0, 0.75, -0.75, 1.5, -1.5, 2.25, -2.25].map((dv) => a + dv).find((v) => v > a0 + 0.5 && v < a1 - 0.5 && fits(at(v), [0, -1, 0], 1.625, 'deck'));
+        const v = [0, 0.75, -0.75, 1.5, -1.5, 2.25, -2.25].map((dv) => a + dv).find((v) => v > a0 + 0.5 && v < a1 - 0.5 && fitsAll(at(v), [0, -1, 0], 1.625, 'deck'));
         if (v !== undefined) screw('deck', at(v), [0, -1, 0], 1.625);
       }
     }
-  }
-
-  // L/P — raised lip: 1× boards on the outside faces of the rails, standing proud of the deck
-  let lipT = 0, lipBoard = null;
-  if (p.lip > 0) {
-    const need = p.ply + p.lip + LIP_OVERLAP;
-    lipBoard = LIP_BOARDS.find((b) => LUMBER[b].w >= need) || LIP_BOARDS[LIP_BOARDS.length - 1];
-    if (LUMBER[lipBoard].w < need) warnings.push(`A ${fmt(p.lip)} lip is taller than a 1×8 can cover and still lap ${fmt(LIP_OVERLAP)} onto the rail. Lower the lip height.`);
-    lipT = LUMBER[lipBoard].t;
-    const top = D + p.lip, bot = top - LUMBER[lipBoard].w;
-    const lb = lipBoard.replace('x', '×');
-    def('L', 'Lip, head / foot', lipBoard, W + 2 * lipT, `Overlaps the ends of the side lips. Top edge sits ${fmt(p.lip)} above the deck.`);
-    put('L', box(-lipT, W + lipT, bot, top, -lipT, 0), 1);
-    put('L', box(-lipT, W + lipT, bot, top, L, L + lipT), 1);
-    def('P', 'Lip, side', lipBoard, L, `${lb} screwed to the outside of the side rail, flush with the head and foot rails.`);
-    put('P', box(-lipT, 0, bot, top, 0, L), 1);
-    put('P', box(W, W + lipT, bot, top, 0, L), 1);
-
-    const ov = F - bot;
-    const ys = ov >= 1.6 ? [F - 0.55, bot + 0.55] : [(F + bot) / 2];
-    joint('lip', 7, 'trim', 'Lip (L/P) into rail',
-      `Pairs every 16″, starting 2″ from each end, ${ys.map((y) => fmt(top - y)).join(' and ')} down from the lip's top edge (that's into the rail, below the deck). A pair moves over wherever it would hit a frame or ledger screw inside the rail.`);
-    const lipRun = (face, ax, dir, a0, a1, railFace) => {
-      const n = Math.max(1, Math.ceil((a1 - a0 - 4) / 16));
-      for (let i = 0; i <= n; i++) {
-        const base = a0 + 2 + (i * (a1 - a0 - 4)) / n;
-        const at = (v, y) => (ax === 'x' ? [face, y, v] : [v, y, face]);
-        const a = [0, 1, -1, 2, -2, 3, -3, 4, -4].map((d) => base + d)
-          .find((v) => v >= a0 + 1.5 && v <= a1 - 1.5 && ys.every((y) => fits(at(v, y), dir, 1.625, null)));
-        if (a === undefined) continue;
-        for (const y of ys) screw('lip', ax === 'x' ? [face, y, a] : [a, y, face], dir, 1.625);
-      }
-    };
-    lipRun(-lipT, 'z', [0, 0, 1], -lipT, W + lipT, 0);
-    lipRun(L + lipT, 'z', [0, 0, -1], -lipT, W + lipT, L);
-    lipRun(-lipT, 'x', [1, 0, 0], 0, L, 0);
-    lipRun(W + lipT, 'x', [-1, 0, 0], 0, L, W);
   }
 
   // S/T/U — dog step: a small plywood box, freestanding against the bed
@@ -435,17 +485,21 @@ function design(p) {
       note: 'Every 8″ along every member under the deck' },
     { id: 'pad', item: 'Felt or rubber furniture pads', spec: '3½″ square', qty: legs.length, note: 'One per leg' },
   ];
-  if (lipBoard) hw.push({ id: 'trim', item: '1⅝″ trim-head screws', spec: 'for the lip boards', qty: joints.lip.count,
+  if (lipBoard && !hidden) hw.push({ id: 'trim', item: '1⅝″ trim-head screws', spec: 'for the lip boards', qty: joints.lip.count,
     note: 'Two every 16″ into the rails, below the deck line' });
+  if (hidden) hw.push({ id: 'pan', item: `${fmt(t + lipT / 2)} pan-head wood screws`, spec: '#8, for the lip, driven from inside', qty: joints.lip.count,
+    note: 'Pan or washer head, so the head stops flat on the rail and the depth is exact' });
   if (step) {
     hw.push(
       { id: 'stepScrew', item: '1⅝″ construction screws', spec: 'for the step box (same screws as the deck)', qty: joints.stepTop.count + joints.stepBox.count, note: 'Every 6″ through the top, 3 per end/divider joint' },
-      { id: 'glue', item: 'Wood glue', spec: '8 oz bottle', qty: 1, note: 'Glue every step joint too. The step stays assembled' },
+
       { id: 'tread', item: 'Non-slip carpet stair tread', spec: `at least ${fmt(step.w)} × ${fmt(step.d)}`, qty: 1, note: 'Traction for paws. Glue or staple it on' },
       { id: 'stepPad', item: 'Rubber non-slip pads', spec: 'for the step feet', qty: 4, note: 'Keeps the step from skating when the dog launches' },
     );
   }
 
+  if (step || hidden) hw.push({ id: 'glue', item: 'Wood glue', spec: hidden && step ? '16 oz bottle' : '8 oz bottle', qty: 1,
+    note: [hidden && 'A bead behind the lip', step && 'every step joint'].filter(Boolean).join(', and ') + '.' });
   const all = Object.values(defs).flatMap((d) => d.pieces.map((pc) => pc.box));
   const bounds = {
     x: [Math.min(...all.map((b) => b.x[0])), Math.max(...all.map((b) => b.x[1]))],
@@ -454,7 +508,7 @@ function design(p) {
 
   return { p, W, L, H, Lh, D, F, rh, yR0, t, defs, joistX, leftX, mattresses, boards, sheets, hw, warnings,
     plyName, legs, floorGap: yR0, diag: Math.hypot(W, L), gx, lipT, lipBoard, step, bounds,
-    OW: W + 2 * lipT, OL: L + 2 * lipT, fast, joints };
+    OW: W + 2 * lipT, OL: L + 2 * lipT, fast, joints, reserved, hidden, hb: { x: hbX, fromTop: F - hbY }, stDeck, stLip };
 }
 
 // Guillotine-nest one piece into the free rectangles of existing sheets (either rotation).
@@ -536,7 +590,7 @@ function renderCuts(d) {
 const HD_SEARCH = {
   // no slashes: an encoded "/" in the URL path isn't reliably handled, so fractions are left to the item name
   screw3: 'GRK RSS structural screws 3 in', screw25: '#9 construction screws',
-  deck: '#9 construction screws', pad: 'felt furniture pads', trim: '#8 trim head screws',
+  deck: '#9 construction screws', pad: 'felt furniture pads', trim: '#8 trim head screws', pan: '#8 pan head wood screws 2 in',
   stepScrew: '#9 construction screws', glue: 'wood glue', tread: 'carpet stair tread', stepPad: 'rubber non slip furniture pads',
 };
 const hdLink = (term) => `https://www.homedepot.com/s/${encodeURIComponent(term)}`;
@@ -546,9 +600,10 @@ function buyRows(d) {
   for (const [stock, boards] of Object.entries(d.boards)) {
     const byLen = {};
     boards.forEach((b) => (byLen[b.len] = (byLen[b.len] || 0) + 1));
+    const isBoard = stock === d.lipBoard;
     for (const [len, qty] of Object.entries(byLen))
-      rows.push({ key: stock, item: `${stock.replace('x', '×')} ${stock[0] === '1' ? 'board' : 'lumber'}`, size: ftIn(+len), qty, unit: +len / 12, unitLabel: '/ft',
-        search: stock[0] === '1' ? `${stock}x${len / 12} select pine board` : `${stock}x${len / 12} lumber`,
+      rows.push({ key: stock, item: `${stock.replace('x', '×')} ${isBoard ? 'board' : 'lumber'}`, size: ftIn(+len), qty, unit: +len / 12, unitLabel: '/ft',
+        search: isBoard ? `${stock.replace('5/4', '5 quarter')} x ${len / 12} ft select pine board` : `${stock}x${len / 12} lumber`,
         note: stock === d.lipBoard ? 'For the lip. It\'s the visible face, so choose straight, clear select pine or poplar.' : '' });
   }
   rows.push({ key: `ply${d.p.ply}`, item: `${d.plyName} sheet`, size: '4′ × 8′', qty: d.sheets.length, unit: 1, unitLabel: '/sheet',
@@ -622,13 +677,17 @@ function renderSteps(d) {
     ['Add the ledgers.', `Still upside down, screw the 2×2 ledgers (J) along the inside of the head and foot rails and the outside faces of the mid beams, running between the legs. Stand a 2×4 offcut on edge on the floor against the rail and rest the ledger on it. That puts the ledger's top edge exactly ${fmt(3.5)} below the rail top, so the joists will end up flush.`],
     ['Flip, square, level.', `Turn the frame over (you'll want two people). Measure both diagonals, which should each be about ${fmt(d.diag)}, and push the frame until they match. Check for level and shim any leg that rocks. Stick a pad under each leg.`],
     ['Set the joists.', `Drop the joists (E) onto the ledgers at these centers from the left edge: ${d.leftX.map(fmt).join(', ')}. Mirror them from the right edge, and put the spine halves (C) on the ${fmt(d.H)} center mark. The joists at ${fmt(48)} and ${fmt(d.W - 48)} carry the plywood seams, so place those two carefully. Toe-screw each end into its ledger, then screw through the head and foot rails into the spine ends.`],
-    ['Lay the deck.', `Put the two 48″ panels (G) on the outside edges and the ${fmt(d.W - 96)} strip (H) in the middle. Drive 1⅝″ screws every 8″ into every member underneath.`],
   ];
-  if (d.lipBoard) steps.push(['Add the lip.', `Screw the side lips (P) to the outside faces of the side rails, with the top edge ${fmt(d.p.lip)} above the deck. Then run the head and foot lips (L) across the ends so they cover the ends of P. Put two trim screws every 16″, going into the rail below the deck line. Round over or sand the top edges, since that edge is right at shin height.`]);
+  const deckStep = ['Lay the deck.', `Put the two 48″ panels (G) on the outside edges and the ${fmt(d.W - 96)} strip (H) in the middle${d.hidden ? '. They drop in between the lips, which is why the outside edges are cut ⅛″ undersize' : ''}. Drive 1⅝″ screws every 8″ into every member underneath.`];
+  const lipStep = d.hidden
+    ? ['Add the lip.', `Do this before the deck, while you can still reach inside the rails. Clamp the side lips (P) to the outside of the side rails with the top edge ${fmt(d.p.ply + d.p.lip)} above the rail top. A plywood offcut plus a ${fmt(d.p.lip)} block on the rail makes a quick gauge. Run the head and foot lips (L) across the ends so they cover the ends of P. Glue behind each board, then screw from inside through the rail into the lip, so nothing shows outside. Round over or sand the top edges, since that edge is right at shin height.`]
+    : ['Add the lip.', `Screw the side lips (P) to the outside faces of the side rails, with the top edge ${fmt(d.p.lip)} above the deck. Then run the head and foot lips (L) across the ends so they cover the ends of P. Put two trim screws every 16″, going into the rail below the deck line. Round over or sand the top edges, since that edge is right at shin height.`];
+  if (d.lipBoard && d.hidden) steps.push(lipStep, deckStep);
+  else { steps.push(deckStep); if (d.lipBoard) steps.push(lipStep); }
   steps.push(['Mattresses on.', `Set the two queens side by side. There's ${fmt(d.p.clear)} of deck showing around them${d.lipBoard ? ', inside the lip' : ''}. Add a bed bridge and connector strap across the seam, then check the top height, which should be about ${fmt(d.p.target)} before it settles.`]);
   if (d.step) steps.push(['Build the dog step.', `Glue and screw the front and back (T) to the two ends and the center divider (U), then glue and screw the top (S) on. Round every edge, glue on the carpet tread, stick the rubber pads underneath, and set it ${where[d.step.loc]}. It's ${fmt(d.step.h)} high, so the dog makes two jumps of about ${fmt(d.step.h)} each instead of one ${fmt(d.p.target)} jump.`]);
   const stageOf = { 'Build the perimeter upside down.': 1, 'Add the mid beams.': 2, 'Stand the legs in.': 3, 'Add the ledgers.': 4,
-    'Set the joists.': 5, 'Lay the deck.': 6, 'Add the lip.': 7, 'Mattresses on.': 8, 'Build the dog step.': 9 };
+    'Set the joists.': 5, 'Lay the deck.': d.stDeck, 'Add the lip.': d.stLip, 'Mattresses on.': 8, 'Build the dog step.': 9 };
   stageList = [];
   $('#stepList').innerHTML = steps.map(([h, b]) => {
     const st = stageOf[h];
@@ -639,6 +698,8 @@ function renderSteps(d) {
       <span class="n">× ${j.count}</span> <button class="zoom" data-joint="${j.key}">Zoom to one</button><div>${esc(j.where)}</div></li>`).join('')}</ul>` : '';
     return `<li><strong>${h}</strong>${b}${fx}<button class="show3d" data-stage="${st}">Show in 3D</button></li>`;
   }).join('');
+  stageList.sort((a, b) => a.stage - b.stage);
+  $('#hbNote').innerHTML = `<strong>Adding a headboard later.</strong> The frame is set up for it. Three ⅜″ bolt paths through the head rail are kept clear of every screw in the plan: one into each head corner leg, ${fmt(d.hb.x[0])} in from each side, and one into the leg beside the spine, ${fmt(d.hb.x[1])} from the left. All three are ${fmt(d.hb.fromTop)} down from the rail top. Drill through the headboard posts or a mounting bracket${d.lipBoard ? ', the lip,' : ''} the head rail and the leg, and use carriage bolts with washers and nuts on the inside of the legs. The bolt length is your post thickness plus ${fmt(d.lipT + 1.5 + 3.5)} (${d.lipBoard ? 'lip, ' : ''}rail and leg), plus about 1″ for the washer and nut. A wall-mounted headboard (French cleat) needs nothing from the frame at all.`;
   $('#stepList').querySelectorAll('.zoom').forEach((btn) => btn.addEventListener('click', () => {
     focusJoint(btn.dataset.joint);
     $('#render').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1090,7 +1151,7 @@ function renderAll() {
 
 $('#legend').innerHTML = GROUP_LABELS.map(([m, l]) => `<span><i style="background:${COLORS[m]}"></i>${l}</span>`).join('')
   + Object.values(FASTENER_TYPES).map((f) => `<span class="lfx"><i style="background:${f.color};border-radius:50%"></i>${f.label}</span>`).join('');
-['#mattT', '#target', '#clear', '#rail', '#spacing', '#ply', '#lip', '#stepOn', '#stepH', '#stepW', '#stepD', '#stepLoc']
+['#mattT', '#target', '#clear', '#rail', '#spacing', '#ply', '#lip', '#lipFix', '#stepOn', '#stepH', '#stepW', '#stepD', '#stepLoc']
   .forEach((id) => $(id).addEventListener('input', renderAll));
 ['#tMatt', '#tPly', '#tStep', '#tFast', '#tXray'].forEach((id) => $(id).addEventListener('change', applyToggles));
 $('#tExplode').addEventListener('change', () => { applyToggles(); setView(currentView); });

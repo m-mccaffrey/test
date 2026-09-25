@@ -65,6 +65,12 @@
       <label>Lip above deck <span class="hint">0 = no lip</span>
         <div class="num"><input type="number" id="lip" value="2" min="0" max="4.5" step="0.25"><span>in</span></div>
       </label>
+      <label>Lip fastening
+        <select id="lipFix">
+          <option value="inside" selected>From inside (hidden, 5/4 lip)</option>
+          <option value="outside">From outside (1× lip)</option>
+        </select>
+      </label>
     </div>
     <h3>Dog step</h3>
     <div class="controls">
@@ -168,7 +174,8 @@
       <li><strong>Mattress thickness sets everything.</strong> It's set to 11″ here, which puts the deck at 13″. Measure the mattress by itself, then change the value above. The legs, heights and drawings all update from it.</li>
       <li><strong>It gets built in the bedroom.</strong> The finished frame is over 10′ wide and won't fit through a door. The 12′ boards for the rails and lip can get into the room, so the head and foot rails stay one piece.</li>
       <li><strong>It comes apart.</strong> The frame and lip are all screws and hangers, with no glue, so you can take it down to move it. If the deck squeaks, add construction adhesive under the plywood, or a strip of felt on the tops of the joists.</li>
-      <li><strong>The lip.</strong> The lip is a 1× board screwed to the outside of the rails. It stands above the deck to stop the mattresses sliding, and it covers the plywood edge and the top of the raw 2× rails. Because it sits beside the mattresses, not under them, it doesn't change the 24″ mattress-top height. Keep it lower than the side of the mattress, or it'll dig into the backs of your legs when you sit on the edge. 2″ is a good starting point.</li>
+      <li><strong>The lip.</strong> The lip is a board on the outside of the rails. It stands above the deck to stop the mattresses sliding, and it covers the plywood edge and the top of the raw 2× rails. By default it's 5/4 stock (1″ thick) screwed from inside the frame, so no screws show on the outside. You can switch it to a 1× board screwed from outside. Because it sits beside the mattresses, not under them, it doesn't change the mattress-top height. Keep it lower than the side of the mattress, or it'll dig into the backs of your legs when you sit on the edge. 2″ is a good starting point.</li>
+      <li id="hbNote"></li>
       <li><strong>The mattress seam.</strong> Even with the lip, two queens can open a gap in the middle. A foam "bed bridge" filler strip plus a king-split connector strap closes it.</li>
       <li><strong>Dog step.</strong> It's a glued plywood box cut from the deck offcuts, so it doesn't need an extra sheet at the default size. It stands on its own, and rubber pads keep it from sliding. If it still moves, screw a small cleat from it to the lip. Height defaults to half the bed height, so the dog makes two equal jumps.</li>
       <li><strong>Floor clearance.</strong> Under the rails is open, which works for robot vacuums and storage bins. The number is under "Height stack" above.</li>
