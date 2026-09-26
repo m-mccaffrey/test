@@ -26,6 +26,8 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
+      # version the script and stylesheet URLs so browsers never run a stale copy after a deploy
+      - run: sed -i "s/app\.js\"/app.js?v=${GITHUB_SHA::7}\"/; s/style\.css\"/style.css?v=${GITHUB_SHA::7}\"/" bed/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: bed

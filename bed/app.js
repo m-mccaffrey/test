@@ -27,12 +27,13 @@ const GROUP_OF = { H: 'G', P: 'L', T: 'S', U: 'S' };
 // build step (stage) each part is installed in
 const STAGE_OF = { A: 1, B: 1, D: 2, F: 3, J: 4, C: 5, E: 5, G: 6, H: 6, L: 7, P: 7, M: 8, S: 9, T: 9, U: 9 };
 const FASTENER_TYPES = {
-  struct: { color: '#e8b400', r: 0.15, head: 0.42, label: '3″ deck screw' },
-  screw25: { color: '#d4553a', r: 0.12, head: 0.33, label: '2½″ construction screw' },
-  deck: { color: '#2f7de1', r: 0.12, head: 0.36, label: '1⅝″ deck screw' },
-  pan: { color: '#0e7c86', r: 0.11, head: 0.3, label: '2″ pan-head screw' },
-  trim: { color: '#18a999', r: 0.11, head: 0.3, label: '1⅝″ trim-head screw' },
-  step: { color: '#a557d6', r: 0.11, head: 0.32, label: '1⅝″ step screw' },
+  // product: the shopping-list line this fastener is bought as (deck and step screws are the same screw)
+  struct: { color: '#e8b400', r: 0.15, head: 0.42, label: '3″ deck screw', product: 'screw3' },
+  screw25: { color: '#d4553a', r: 0.12, head: 0.33, label: '2½″ construction screw', product: 'screw25' },
+  deck: { color: '#2f7de1', r: 0.12, head: 0.36, label: '1⅝″ deck screw', product: 'deck' },
+  pan: { color: '#0e7c86', r: 0.11, head: 0.3, label: '2″ pan-head screw', product: 'pan' },
+  trim: { color: '#18a999', r: 0.11, head: 0.3, label: '1⅝″ trim-head screw', product: 'trim' },
+  step: { color: '#a557d6', r: 0.11, head: 0.32, label: '1⅝″ step screw', product: 'deck' },
 };
 const GROUP_LABELS = [
   ['A', 'Head/foot rails'], ['B', 'Side rails'], ['C', 'Spine halves'], ['D', 'Mid beam'],
@@ -42,7 +43,7 @@ const DEFAULT_PRICES = { // rough per-linear-foot / per-unit placeholders
   '2x4': 0.55, '2x6': 0.85, '2x8': 1.1, '2x10': 1.55, '4x4': 1.6, '1x4': 0.9, '1x6': 1.4, '1x8': 1.9, '5/4x4': 1.6, '5/4x6': 2.4, '5/4x8': 3.2,
   'ply0.75': 62, 'ply0.625': 52,
   screw3: 0.12, screw25: 0.08, '2x2': 0.45, deck: 0.06, pad: 0.75,
-  trim: 0.1, pan: 0.1, stepScrew: 0.05, glue: 6, tread: 14, stepPad: 0.5,
+  trim: 0.1, pan: 0.1, glue: 6, tread: 14, stepPad: 0.5,
 };
 
 // ---------- formatting ----------
@@ -476,30 +477,42 @@ function design(p) {
 
   // hardware
   const legs = defs.F.pieces;
-  const hw = [
-    { id: 'screw3', item: '3″ deck / construction screws', spec: '#10 × 3″ exterior (Spax, Deckmate or similar), not drywall screws', qty: fast.filter((f) => f.type === 'struct').length,
-      note: 'Butt joints and legs' },
-    { id: 'screw25', item: '2½″ construction screws', spec: '#9 × 2½″, for the ledgers and toe-screwing the joists', qty: joints.ledger.count + joints.toe.count,
-      note: 'Short enough to stop ½″ inside the rails' },
-    { id: 'deck', item: '1⅝″ construction screws', spec: 'for the plywood deck', qty: joints.deck.count,
-      note: 'Every 8″ along every member under the deck' },
-    { id: 'pad', item: 'Felt or rubber furniture pads', spec: '3½″ square', qty: legs.length, note: 'One per leg' },
-  ];
-  if (lipBoard && !hidden) hw.push({ id: 'trim', item: '1⅝″ trim-head screws', spec: 'for the lip boards', qty: joints.lip.count,
-    note: 'Two every 16″ into the rails, below the deck line' });
-  if (hidden) hw.push({ id: 'pan', item: `${fmt(t + lipT / 2)} pan-head wood screws`, spec: '#8, for the lip, driven from inside', qty: joints.lip.count,
-    note: 'Pan or washer head, so the head stops flat on the rail and the depth is exact' });
-  if (step) {
-    hw.push(
-      { id: 'stepScrew', item: '1⅝″ construction screws', spec: 'for the step box (same screws as the deck)', qty: joints.stepTop.count + joints.stepBox.count, note: 'Every 6″ through the top, 3 per end/divider joint' },
-
-      { id: 'tread', item: 'Non-slip carpet stair tread', spec: `at least ${fmt(step.w)} × ${fmt(step.d)}`, qty: 1, note: 'Traction for paws. Glue or staple it on' },
-      { id: 'stepPad', item: 'Rubber non-slip pads', spec: 'for the step feet', qty: 4, note: 'Keeps the step from skating when the dog launches' },
-    );
+  // Hardware list, generated from the model: one line per product actually used, counted from the modeled fasteners
+  // and parts, so the list can't carry anything the design doesn't have.
+  const PRODUCTS = {
+    screw3: { item: '3″ deck / construction screws', spec: '#10 × 3″ exterior (Spax, Deckmate or similar), not drywall screws' },
+    screw25: { item: '2½″ construction screws', spec: '#9 × 2½″' },
+    deck: { item: '1⅝″ construction screws', spec: '#9 × 1⅝″' },
+    trim: { item: '1⅝″ trim-head screws', spec: '#8 × 1⅝″' },
+    pan: { item: `${fmt(t + lipT / 2)} pan-head wood screws`, spec: `#8 × ${fmt(t + lipT / 2)}, pan or washer head so it stops flat on the rail` },
+  };
+  const byProduct = {};
+  for (const f of fast) {
+    const pid = FASTENER_TYPES[f.type].product;
+    const bp = (byProduct[pid] ||= { qty: 0, uses: new Map() });
+    bp.qty++;
+    bp.uses.set(joints[f.key].title, (bp.uses.get(joints[f.key].title) || 0) + 1);
   }
+  const hw = Object.entries(byProduct).map(([id, bp]) => ({ id, ...PRODUCTS[id], qty: bp.qty, fromModel: true,
+    note: [...bp.uses].map(([title, n]) => `${title} (${n})`).join('; ') }));
+  hw.push({ id: 'pad', item: 'Felt or rubber furniture pads', spec: '3½″ square', qty: defs.F.pieces.length, note: 'One under each leg (F)' });
+  if (defs.S) hw.push(
+    { id: 'tread', item: 'Non-slip carpet stair tread', spec: `at least ${fmt(step.w)} × ${fmt(step.d)}`, qty: defs.S.pieces.length, note: 'Traction for paws on the step top (S). Glue or staple it on' },
+    { id: 'stepPad', item: 'Rubber non-slip pads', spec: 'for the step feet', qty: 4, note: 'Keeps the step from skating when the dog launches' });
+  if (defs.S || hidden) hw.push({ id: 'glue', item: 'Wood glue', spec: hidden && defs.S ? '16 oz bottle' : '8 oz bottle', qty: 1,
+    note: [hidden && 'A bead behind the lip', defs.S && 'every step joint'].filter(Boolean).join(', and ') });
 
-  if (step || hidden) hw.push({ id: 'glue', item: 'Wood glue', spec: hidden && step ? '16 oz bottle' : '8 oz bottle', qty: 1,
-    note: [hidden && 'A bead behind the lip', step && 'every step joint'].filter(Boolean).join(', and ') + '.' });
+  // reconciliation: everything in the model is on a list, and nothing is on a list that isn't in the model
+  const lumberPieces = Object.values(defs).filter((x) => x.stock !== 'ply').reduce((n, x) => n + x.pieces.length, 0);
+  const packed = Object.values(boards).reduce((n, bs) => n + bs.reduce((m, bd) => m + bd.cuts.length, 0), 0);
+  const plyPieces = Object.values(defs).filter((x) => x.stock === 'ply').reduce((n, x) => n + x.pieces.length, 0);
+  const nested = sheets.reduce((n, sh) => n + sh.pieces.length, 0);
+  const listed = hw.filter((h) => h.fromModel).reduce((n, h) => n + h.qty, 0);
+  const reconcile = {
+    ok: listed === fast.length && packed === lumberPieces && nested === plyPieces,
+    fasteners: fast.length, listed, kinds: Object.keys(byProduct).length, lumberPieces, packed, plyPieces, nested,
+  };
+
   const all = Object.values(defs).flatMap((d) => d.pieces.map((pc) => pc.box));
   const bounds = {
     x: [Math.min(...all.map((b) => b.x[0])), Math.max(...all.map((b) => b.x[1]))],
@@ -508,7 +521,7 @@ function design(p) {
 
   return { p, W, L, H, Lh, D, F, rh, yR0, t, defs, joistX, leftX, mattresses, boards, sheets, hw, warnings,
     plyName, legs, floorGap: yR0, diag: Math.hypot(W, L), gx, lipT, lipBoard, step, bounds,
-    OW: W + 2 * lipT, OL: L + 2 * lipT, fast, joints, reserved, hidden, hb: { x: hbX, fromTop: F - hbY }, stDeck, stLip };
+    OW: W + 2 * lipT, OL: L + 2 * lipT, fast, joints, reserved, hidden, hb: { x: hbX, fromTop: F - hbY }, stDeck, stLip, reconcile };
 }
 
 // Guillotine-nest one piece into the free rectangles of existing sheets (either rotation).
@@ -591,7 +604,7 @@ const HD_SEARCH = {
   // no slashes: an encoded "/" in the URL path isn't reliably handled, so fractions are left to the item name
   screw3: '#10 x 3 in deck screws', screw25: '#9 construction screws',
   deck: '#9 construction screws', pad: 'felt furniture pads', trim: '#8 trim head screws', pan: '#8 pan head wood screws 2 in',
-  stepScrew: '#9 construction screws', glue: 'wood glue', tread: 'carpet stair tread', stepPad: 'rubber non slip furniture pads',
+  glue: 'wood glue', tread: 'carpet stair tread', stepPad: 'rubber non slip furniture pads',
 };
 const hdLink = (term) => `https://www.homedepot.com/s/${encodeURIComponent(term)}`;
 
@@ -615,6 +628,11 @@ function buyRows(d) {
 }
 
 function renderBuy(d) {
+  const rc = d.reconcile;
+  $('#reconcile').className = rc.ok ? 'ok' : 'warn';
+  $('#reconcile').textContent = rc.ok
+    ? `✓ These lists match the 3D model: all ${rc.fasteners} fasteners (${rc.kinds} kinds), ${rc.lumberPieces} lumber pieces and ${rc.plyPieces} plywood pieces are accounted for, and nothing is listed that isn't in the model.`
+    : `The lists and the model disagree: ${rc.listed} of ${rc.fasteners} fasteners listed, ${rc.packed} of ${rc.lumberPieces} lumber pieces packed, and ${rc.nested} of ${rc.plyPieces} plywood pieces placed.`;
   const rows = buyRows(d);
   const lumber = rows.filter((r) => !r.hw), hw = rows.filter((r) => r.hw);
   const shop = (r) => (r.search ? ` <a class="shop" href="${hdLink(r.search)}" target="_blank" rel="noopener" title="Search Home Depot for “${esc(r.search)}”">Home Depot ↗</a>` : '');
