@@ -131,13 +131,15 @@ function design(p) {
   };
 
   // A — head & foot rails run full width; everything else butts between them
-  def('A', 'Head / foot rail', p.rail, W, 'Full width. The side rails and spine halves butt into these.');
-  put('A', box(0, W, yR0, F, 0, t), 1);
-  put('A', box(0, W, yR0, F, L - t, L), 1);
+  // the side rails run the full length and the head/foot rails fit between them: the long rails come out 3″
+  // shorter (118″), so they cut from 10′ boards instead of 12′
+  def('A', 'Head / foot rail', p.rail, W - 2 * t, 'Fits between the side rails. The spine halves butt into these.');
+  put('A', box(t, W - t, yR0, F, 0, t), 1);
+  put('A', box(t, W - t, yR0, F, L - t, L), 1);
   // B — side rails
-  def('B', 'Side rail', p.rail, L - 2 * t, 'Fits between the head and foot rails.');
-  put('B', box(0, t, yR0, F, t, L - t), 1);
-  put('B', box(W - t, W, yR0, F, t, L - t), 1);
+  def('B', 'Side rail', p.rail, L, 'Full length. Overlaps the ends of the head and foot rails.');
+  put('B', box(0, t, yR0, F, 0, L), 1);
+  put('B', box(W - t, W, yR0, F, 0, L), 1);
   // D — mid beam: two separate boards, 3½″ apart, with the middle legs sandwiched between them
   const Dg = lg, Dz0 = Lh - Dg / 2 - t, Dz1 = Lh + Dg / 2 + t; // outer faces of the pair
   def('D', 'Mid beam', p.rail, W - 2 * t, `Two of these, ${fmt(Dg)} apart at mid-length with the middle legs sandwiched between them. Ledgers on their outside faces carry the joists.`);
@@ -220,11 +222,13 @@ function design(p) {
   const rb = (f) => yR0 + (F - yR0) * f;
   const hts = (fs) => fs.map((f) => fmt((F - yR0) * (1 - f))).reverse().join(', ');
   const fromTop = 'down from the top edge (the edge on the floor while the frame is upside down)';
-  joint('corner', 1, 'struct', 'Head/foot rail (A) into side rail (B)',
-    `3 per corner, driven through the outside face of A into the end of B: ${fmt(t / 2)} in from the end of A, at ${hts(ZB)} ${fromTop}.`);
-  for (const x of [t / 2, W - t / 2]) for (const f of ZB) {
-    screw('corner', [x, rb(f), 0], [0, 0, 1], 3);
-    screw('corner', [x, rb(f), L], [0, 0, -1], 3);
+  // corner butt screws now run along x (through B into A's end), so they use the x-butt heights, which clear the
+  // z-direction leg screws they cross
+  joint('corner', 1, 'struct', 'Side rail (B) into head/foot rail (A)',
+    `3 per corner, driven through the outside face of B into the end of A: ${fmt(t / 2)} in from the end of B, at ${hts(XB)} ${fromTop}.`);
+  for (const z of [t / 2, L - t / 2]) for (const f of XB) {
+    screw('corner', [0, rb(f), z], [1, 0, 0], 3);
+    screw('corner', [W, rb(f), z], [-1, 0, 0], 3);
   }
   joint('beamSide', 2, 'struct', 'Side rail (B) into mid beam (D)',
     `3 into each mid beam on each side (6 per side), through B into the end of D, centered ${fmt(Dz0 + t / 2)} and ${fmt(Dz1 - t / 2)} from the head end, at ${hts(XB)} ${fromTop}.`);
@@ -285,7 +289,7 @@ function design(p) {
   // G/H — plywood deck: two full-width sheets at the outside, a strip in the middle
   // Headboard, for later: keep a 3/8″ bolt path clear through the head rail into each head corner leg (and the
   // leg beside the spine), at mid-rail height. Every fastener is placed to miss these, so bolts can go in any time.
-  const hbY = rb(0.5), hbX = [t + lg / 2, H + t / 2 + lg / 2, W - t - lg / 2];
+  const hbY = rb(0.5), hbX = [t + lg / 2 + 0.5, H + t / 2 + lg / 2, W - t - lg / 2 - 0.5];
   const hidden = p.lip > 0 && p.lipFix === 'inside';
   const lipT0 = p.lip > 0 ? LUMBER[(hidden ? LIP_BOARDS_HIDDEN : LIP_BOARDS)[0]].t : 0;
   const reserved = hbX.map((x) => ({ key: 'headboard', p: [x, hbY, -lipT0 - 1.5], dir: [0, 0, 1], len: lipT0 + 1.5 + t + lg - 0.5, r: 0.19 }));
@@ -318,12 +322,12 @@ function design(p) {
     lipT = LUMBER[lipBoard].t;
     const top = D + p.lip, bot = top - LUMBER[lipBoard].w;
     const lb = lipBoard.replace('x', '×');
-    def('L', 'Lip, head / foot', lipBoard, W + 2 * lipT, `Overlaps the ends of the side lips. Top edge sits ${fmt(p.lip)} above the deck.`);
-    put('L', box(-lipT, W + lipT, bot, top, -lipT, 0), 1);
-    put('L', box(-lipT, W + lipT, bot, top, L, L + lipT), 1);
-    def('P', 'Lip, side', lipBoard, L, `${lb} on the outside of the side rail, flush with the head and foot rails.`);
-    put('P', box(-lipT, 0, bot, top, 0, L), 1);
-    put('P', box(W, W + lipT, bot, top, 0, L), 1);
+    def('L', 'Lip, head / foot', lipBoard, W, `Fits between the side lips, flush with the outside of the side rails. Top edge sits ${fmt(p.lip)} above the deck.`);
+    put('L', box(0, W, bot, top, -lipT, 0), 1);
+    put('L', box(0, W, bot, top, L, L + lipT), 1);
+    def('P', 'Lip, side', lipBoard, L + 2 * lipT, `${lb} on the outside of the side rail. Full length, overlapping the ends of the head and foot lips.`);
+    put('P', box(-lipT, 0, bot, top, -lipT, L + lipT), 1);
+    put('P', box(W, W + lipT, bot, top, -lipT, L + lipT), 1);
 
     const ov = F - bot;
     const ys = ov >= 1.6 ? [F - 0.55, bot + 0.55] : [(F + bot) / 2];
@@ -341,10 +345,10 @@ function design(p) {
           for (const y of ys) screw('lip', ax === 'x' ? [face, y, a] : [a, y, face], dir, 1.625);
         }
       };
-      lipRun(-lipT, 'z', [0, 0, 1], -lipT, W + lipT);
-      lipRun(L + lipT, 'z', [0, 0, -1], -lipT, W + lipT);
-      lipRun(-lipT, 'x', [1, 0, 0], 0, L);
-      lipRun(W + lipT, 'x', [-1, 0, 0], 0, L);
+      lipRun(-lipT, 'z', [0, 0, 1], 0, W);
+      lipRun(L + lipT, 'z', [0, 0, -1], 0, W);
+      lipRun(-lipT, 'x', [1, 0, 0], -lipT, L + lipT);
+      lipRun(W + lipT, 'x', [-1, 0, 0], -lipT, L + lipT);
     } else {
       // hidden: pan-head screws from the rails' inside faces out into the back of the lip. The head bears on the
       // rail face, so each goes exactly (length − 1½″) into the lip: 2″ screws → ½″ in, ½″ short of the show face.
@@ -689,7 +693,7 @@ function renderSteps(d) {
   const steps = [
     ['Confirm the numbers.', `Measure the mattress thickness and both queen mattresses (they're usually 60″ × 80″, but check). Enter the thickness above. With ${fmt(d.p.mattT)}, the deck top has to sit at ${fmt(d.D)}.`],
     ['Cut and label.', `Cut every piece on the cut list and write its letter on it. Check that the cuts on each pair or set match exactly: A, B, C, D, all ${d.defs.E.pieces.length} E joists and all ${d.legs.length} legs.${d.step ? ' Cut the step pieces (S, T, U) from the plywood offcuts, following the sheet diagram.' : ''} Ease the edges and sand any faces you'll see.${lb ? ` Stain or seal the ${lb} lip boards now if you want a finish.` : ''}`],
-    ['Build the perimeter upside down.', `In the bedroom, lay the four ${r} rails top-edge-down on a flat floor, with the head and foot rails (A) overlapping the ends of the side rails (B). Screw through A into B, three screws per joint. Because the frame is upside down, the floor keeps every top edge flush.`],
+    ['Build the perimeter upside down.', `In the bedroom, lay the four ${r} rails top-edge-down on a flat floor, with the side rails (B) overlapping the ends of the head and foot rails (A). Screw through B into A, three screws per joint. Because the frame is upside down, the floor keeps every top edge flush.`],
     ['Add the mid beams.', `Set the two mid beams (D) across the frame ${fmt(3.5)} apart, centered on mid-length (${fmt(d.Lh)}). A 4×4 offcut between them makes a good spacer. Screw through each side rail (B) into the ends of both beams.`],
     ['Stand the legs in.', `Still upside down, set each 4×4 leg (F) into its spot with its end on the floor, so the top stays flush. Put one in each corner, one beside the center mark (${fmt(d.H)}) at the head and at the foot, and five sandwiched between the two mid beams: one against each side rail, one on the center mark, and one in each half about ${fmt(d.gx)} from the side. Screw 4 screws through each face it touches.`],
     ['Add the ledgers.', `Still upside down, screw the 2×2 ledgers (J) along the inside of the head and foot rails and the outside faces of the mid beams, running between the legs. Stand a 2×4 offcut on edge on the floor against the rail and rest the ledger on it. That puts the ledger's top edge exactly ${fmt(3.5)} below the rail top, so the joists will end up flush.`],
@@ -698,8 +702,8 @@ function renderSteps(d) {
   ];
   const deckStep = ['Lay the deck.', `Put the two 48″ panels (G) on the outside edges and the ${fmt(d.W - 96)} strip (H) in the middle${d.hidden ? '. They drop in between the lips, which is why the outside edges are cut ⅛″ undersize' : ''}. Drive 1⅝″ screws every 8″ into every member underneath.`];
   const lipStep = d.hidden
-    ? ['Add the lip.', `Do this before the deck, while you can still reach inside the rails. Clamp the side lips (P) to the outside of the side rails with the top edge ${fmt(d.p.ply + d.p.lip)} above the rail top. A plywood offcut plus a ${fmt(d.p.lip)} block on the rail makes a quick gauge. Run the head and foot lips (L) across the ends so they cover the ends of P. Glue behind each board, then screw from inside through the rail into the lip, so nothing shows outside. Round over or sand the top edges, since that edge is right at shin height.`]
-    : ['Add the lip.', `Screw the side lips (P) to the outside faces of the side rails, with the top edge ${fmt(d.p.lip)} above the deck. Then run the head and foot lips (L) across the ends so they cover the ends of P. Put two trim screws every 16″, going into the rail below the deck line. Round over or sand the top edges, since that edge is right at shin height.`];
+    ? ['Add the lip.', `Do this before the deck, while you can still reach inside the rails. Clamp the head and foot lips (L) to the outside of the head and foot rails with the top edge ${fmt(d.p.ply + d.p.lip)} above the rail top. A plywood offcut plus a ${fmt(d.p.lip)} block on the rail makes a quick gauge. Then run the side lips (P) the full length so they cover the ends of L. Glue behind each board, then screw from inside through the rail into the lip, so nothing shows outside. Round over or sand the top edges, since that edge is right at shin height.`]
+    : ['Add the lip.', `Screw the head and foot lips (L) to the outside faces of the head and foot rails, with the top edge ${fmt(d.p.lip)} above the deck. Then run the side lips (P) the full length so they cover the ends of L. Put two trim screws every 16″, going into the rail below the deck line. Round over or sand the top edges, since that edge is right at shin height.`];
   if (d.lipBoard && d.hidden) steps.push(lipStep, deckStep);
   else { steps.push(deckStep); if (d.lipBoard) steps.push(lipStep); }
   steps.push(['Mattresses on.', `Set the two queens side by side. There's ${fmt(d.p.clear)} of deck showing around them${d.lipBoard ? ', inside the lip' : ''}. Add a bed bridge and connector strap across the seam, then check the top height, which should be about ${fmt(d.p.target)} before it settles.`]);
