@@ -39,6 +39,7 @@ export class Trip {
     this.onnarrate = () => {};
     this.onstatus = () => {};
     this.onfinish = () => {};
+    this.ongpserror = () => {};
   }
 
   addPois(list) {
@@ -107,7 +108,15 @@ export class Trip {
         this._update();
         if (this.route.length - this.along < 150) this._finish();
       },
-      (err) => this.onstatus(`Location unavailable: ${err.message}`, 'error'),
+      (err) => {
+        if (err.code === 1) {
+          // Permission denied: no point keeping the trip running without a position.
+          this.stop();
+          this.ongpserror(err);
+        } else {
+          this.onstatus(err.code === 3 ? 'Still waiting for a GPS fix…' : 'GPS signal lost — still trying…');
+        }
+      },
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
     );
     this.onstatus('Waiting for GPS…');

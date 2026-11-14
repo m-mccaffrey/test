@@ -165,6 +165,18 @@
     </div>
     <button id="np-replay" class="map-btn replay" hidden>↺ Replay last</button>
 
+    <dialog id="geo-help" aria-labelledby="geo-help-title">
+      <h2 id="geo-help-title">Location is turned off for this site</h2>
+      <p>Your browser blocked location access, so it won't ask again by itself. To turn it back on:</p>
+      <ol id="geo-help-steps"></ol>
+      <p class="hint">If you opened this link from inside another app (for example a chat app), open it in Safari or Chrome instead: in-app browsers often can't use location.</p>
+      <p class="hint">You can still type your starting point in “From”, and “Simulate the drive” works without location.</p>
+      <div class="dialog-buttons">
+        <button class="secondary" id="geo-help-sim" type="button">Simulate the drive instead</button>
+        <button class="primary" id="geo-help-close" type="button">OK</button>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status" hidden></div>
   </div>
 </body>

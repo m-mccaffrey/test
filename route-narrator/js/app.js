@@ -215,7 +215,11 @@ $('use-location').onclick = () => {
       const name = await reverseGeocode(fromPoint);
       if (fromPoint) $('from').value = name.split(',').slice(0, 3).join(',');
     },
-    (err) => { $('from').value = ''; toast(`Couldn't get your location: ${err.message}`, 'error'); },
+    (err) => {
+      $('from').value = '';
+      if (err.code === 1) showLocationHelp();
+      else toast("Couldn't find your location — try again, or type your starting point.", 'error');
+    },
     { enableHighAccuracy: true, timeout: 15000 },
   );
 };
@@ -338,9 +342,10 @@ function showDriving(on) {
   $('drive-status').textContent = '';
 }
 
-$('start-gps').onclick = () => {
+$('start-gps').onclick = async () => {
   if (!trip) return;
   narrator.unlock();
+  if (await locationBlocked()) return showLocationHelp();
   try {
     trip.startGps();
   } catch (e) {
@@ -450,6 +455,13 @@ function wireTrip(t) {
     setTimeout(() => setMarkerState(poi, 'done'), 0);
   };
 
+  t.ongpserror = () => {
+    keepAwake(false);
+    showDriving(false);
+    $('now').hidden = true;
+    showLocationHelp();
+  };
+
   t.onstatus = (msg, kind) => { if (kind === 'error') toast(msg, 'error'); else $('drive-status').textContent = msg; };
 
   t.onfinish = () => {
@@ -502,6 +514,64 @@ function renderUpcoming(force = false) {
   $('upcoming-count').textContent = list.length ? `(${list.length}${list.length === 40 ? '+' : ''})` : '';
   $('upcoming').replaceChildren(...list.map((p) => poiRow(p)));
 }
+
+// ---- location permission help ---------------------------------------------
+
+async function locationBlocked() {
+  try {
+    const status = await navigator.permissions?.query({ name: 'geolocation' });
+    return status?.state === 'denied';
+  } catch {
+    return false; // Permissions API unsupported (older Safari): just try.
+  }
+}
+
+function locationSteps() {
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const android = /Android/.test(ua);
+  const host = location.host;
+  if (ios) {
+    const chrome = /CriOS/.test(ua);
+    const app = chrome ? 'Chrome' : /FxiOS/.test(ua) ? 'Firefox' : /EdgiOS/.test(ua) ? 'Edge' : 'Safari';
+    return [
+      'Open the <b>Settings</b> app → <b>Privacy &amp; Security</b> → <b>Location Services</b>, and make sure it is <b>on</b>.',
+      app === 'Safari'
+        ? 'On that same screen, tap <b>Safari Websites</b> and choose <b>While Using the App</b> (or <b>Ask Next Time</b>).'
+        : `On that same screen, tap <b>${app}</b> and choose <b>While Using the App</b>.`,
+      app === 'Safari'
+        ? `Back in Safari, tap the <b>aA</b> (or page settings) button in the address bar → <b>Website Settings</b> → <b>Location</b> → <b>Allow</b> (or Ask).`
+        : `In ${app}, reload this page and tap <b>Allow</b> when asked.`,
+      'Reload this page and tap <b>Start driving</b> again.',
+    ];
+  }
+  if (android) {
+    return [
+      'Make sure the phone\'s <b>Location</b> is on (swipe down from the top of the screen).',
+      `In Chrome, tap the icon to the left of <b>${host}</b> in the address bar → <b>Permissions</b> (or <b>Site settings</b>) → <b>Location</b> → <b>Allow</b>.`,
+      'If Chrome itself isn\'t allowed: phone <b>Settings</b> → <b>Apps</b> → <b>Chrome</b> → <b>Permissions</b> → <b>Location</b> → <b>Allow only while using the app</b>.',
+      'Reload this page and tap <b>Start driving</b> again.',
+    ];
+  }
+  return [
+    `Click the icon to the left of <b>${host}</b> in the address bar and set <b>Location</b> to <b>Allow</b>.`,
+    'On a Mac, also check System Settings → Privacy &amp; Security → Location Services for your browser.',
+    'Reload this page and try again.',
+  ];
+}
+
+function showLocationHelp() {
+  $('geo-help-steps').innerHTML = locationSteps().map((x) => `<li>${x}</li>`).join('');
+  const d = $('geo-help');
+  if (d.showModal) d.showModal();
+  else d.setAttribute('open', '');
+}
+$('geo-help-close').onclick = () => $('geo-help').close();
+$('geo-help-sim').onclick = () => {
+  $('geo-help').close();
+  if (trip) $('start-sim').click();
+  else toast('Plan a route first, then tap “Simulate the drive”.');
+};
 
 // ---- boot -----------------------------------------------------------------
 
