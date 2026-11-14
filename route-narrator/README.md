@@ -21,6 +21,8 @@ history read from Wikipedia.
 - Map with colour-coded markers, an *Up ahead* list and an *Already heard* log. Tap 🔊 on any place to hear about it right away.
 - Keeps the screen awake while driving where the browser supports it, and remembers your settings.
 
+**Live:** https://m-mccaffrey.github.io/test/route-narrator/
+
 ## Running it
 
 It's a static site with no build step and no API keys. ES modules need to be
@@ -32,9 +34,10 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-GPS only works on `https://` or `localhost`, so to use it in a car, host the
-folder on any static host (GitHub Pages, Netlify, etc.) and open it on your
-phone.
+GPS only works on `https://` or `localhost`. The live site above is deployed
+by `.github/workflows/pages.yml` on every push that touches `route-narrator/`.
+It shares the repo's Pages site with the bed plan (`/bed/`), so the same
+workflow file is also on the bed plan's branch.
 
 ## How it works
 
