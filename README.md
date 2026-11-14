@@ -129,3 +129,8 @@ Volume conservation (deposited volume vs. `Q·t` when the whole cone hits
 the wall) holds to <1% for all three cone profiles and for both the
 profile-revolution and STL geometry paths; profile and STL representations
 of the same cylinder agree on the resulting thickness field.
+
+---
+
+Also in this repo: [`route-narrator/`](route-narrator/), a web app that
+narrates history and points of interest along a driving route.

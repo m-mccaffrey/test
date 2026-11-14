@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Roadside Narrator</title>
+  <meta name="description" content="Spoken stories about the history and places along your driving route." />
+  <meta name="theme-color" content="#1f2a37" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+      <header class="brand">
+        <h1>Roadside Narrator</h1>
+        <p>Stories about the places you pass.</p>
+      </header>
+
+      <!-- Step 1: route -->
+      <section class="card" id="route-card">
+        <h2>Where are you headed?</h2>
+        <form id="route-form" autocomplete="off">
+          <label class="field">
+            <span>From</span>
+            <div class="row">
+              <input id="from" placeholder="Start address or place" required />
+              <button type="button" id="use-location" class="icon-btn" title="Use my current location" aria-label="Use my current location">📍</button>
+            </div>
+          </label>
+          <label class="field">
+            <span>To</span>
+            <input id="to" placeholder="Destination" required />
+          </label>
+          <button type="submit" class="primary" id="plan-btn">Plan route</button>
+        </form>
+        <div id="route-summary" class="summary" hidden></div>
+        <div id="scan-progress" class="progress" hidden><div></div></div>
+      </section>
+
+      <!-- Step 2: interests -->
+      <section class="card">
+        <h2>What do you want to hear about?</h2>
+        <p class="hint">Pick topics, or leave them all off for general history tidbits.</p>
+        <div id="topics" class="chips" role="group" aria-label="Topics"></div>
+        <div class="segmented" role="radiogroup" aria-label="Topic mode" id="mode">
+          <label><input type="radio" name="mode" value="mix" checked /><span>Favour my topics</span></label>
+          <label><input type="radio" name="mode" value="only" /><span>Only my topics</span></label>
+        </div>
+      </section>
+
+      <!-- Step 3: narration settings -->
+      <details class="card" id="settings">
+        <summary><h2>Narration settings</h2></summary>
+        <div class="grid">
+          <label class="field"><span>How often</span>
+            <select id="chattiness">
+              <option value="relaxed">Relaxed — highlights only</option>
+              <option value="normal" selected>Normal</option>
+              <option value="chatty">Chatty — everything</option>
+            </select>
+          </label>
+          <label class="field"><span>Detail</span>
+            <select id="detail">
+              <option value="brief">Brief</option>
+              <option value="normal" selected>Normal</option>
+              <option value="detailed">Detailed</option>
+            </select>
+          </label>
+          <label class="field"><span>Look how far from the road</span>
+            <select id="corridor">
+              <option value="1000">Right by the road (1 km)</option>
+              <option value="3000" selected>Nearby (3 km)</option>
+              <option value="8000">Wide (8 km)</option>
+            </select>
+          </label>
+          <label class="field"><span>Units</span>
+            <select id="units">
+              <option value="imperial">Miles</option>
+              <option value="metric">Kilometres</option>
+            </select>
+          </label>
+          <label class="field"><span>Wikipedia language</span>
+            <select id="lang">
+              <option value="en">English</option>
+              <option value="de">Deutsch</option>
+              <option value="fr">Français</option>
+              <option value="es">Español</option>
+              <option value="it">Italiano</option>
+              <option value="nl">Nederlands</option>
+              <option value="pt">Português</option>
+              <option value="ja">日本語</option>
+            </select>
+          </label>
+          <label class="field wide"><span>Voice</span>
+            <select id="voice"></select>
+          </label>
+          <label class="field wide"><span>Speaking speed <output id="rate-out">1.0×</output></span>
+            <input id="rate" type="range" min="0.7" max="1.5" step="0.05" value="1" />
+          </label>
+          <label class="check wide"><input type="checkbox" id="muted" /> Text only (don't speak)</label>
+        </div>
+      </details>
+
+      <!-- Step 4: drive -->
+      <section class="card" id="drive-card" hidden>
+        <h2>Ready when you are</h2>
+        <div class="drive-buttons" id="start-buttons">
+          <button class="primary big" id="start-gps">🚗 Start driving</button>
+          <button class="secondary big" id="start-sim">▶ Simulate the drive</button>
+        </div>
+        <div id="sim-controls" class="row">
+          <label class="field"><span>Simulation speed</span>
+            <select id="sim-speed">
+              <option value="1">Real time</option>
+              <option value="4">4× faster</option>
+              <option value="10" selected>10× faster</option>
+              <option value="30">30× faster</option>
+            </select>
+          </label>
+          <button class="secondary" id="sim-pause" hidden>Pause</button>
+        </div>
+        <button class="ghost" id="stop-trip" hidden>End trip</button>
+        <p class="hint" id="drive-status"></p>
+      </section>
+
+      <section class="card" id="upcoming-card" hidden>
+        <h2>Up ahead <span class="count" id="upcoming-count"></span></h2>
+        <ol id="upcoming" class="poi-list"></ol>
+      </section>
+
+      <section class="card" id="log-card" hidden>
+        <h2>Already heard</h2>
+        <ol id="log" class="poi-list"></ol>
+      </section>
+
+      <footer class="credits">
+        Stories from <a href="https://www.wikipedia.org/" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA).
+        Maps &amp; geocoding © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.
+        Routing by <a href="https://project-osrm.org/" target="_blank" rel="noopener">OSRM</a>.
+        Keep your eyes on the road.
+      </footer>
+    </aside>
+
+    <main id="map-wrap">
+      <div id="map" aria-label="Map"></div>
+      <button id="recenter" class="map-btn" hidden title="Follow the car">◎ Follow</button>
+    </main>
+
+    <!-- Now playing -->
+    <div id="now" class="now" hidden aria-live="polite">
+      <img id="now-thumb" alt="" hidden />
+      <div class="now-body">
+        <div class="now-topics" id="now-topics"></div>
+        <h3 id="now-title"></h3>
+        <p id="now-text"></p>
+        <a id="now-link" target="_blank" rel="noopener">Read more on Wikipedia</a>
+      </div>
+      <div class="now-controls">
+        <button id="np-pause" class="icon-btn big" aria-label="Pause">⏸</button>
+        <button id="np-skip" class="icon-btn big" aria-label="Skip">⏭</button>
+      </div>
+    </div>
+    <button id="np-replay" class="map-btn replay" hidden>↺ Replay last</button>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+</body>
+</html>
