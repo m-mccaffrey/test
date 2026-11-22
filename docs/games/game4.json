@@ -1,0 +1,51 @@
+{
+  "title": "Christmas, Movies, Music, Events",
+  "players": ["Mikey", "June", "Mom"],
+  "points": 100,
+  "categories": [
+    { "name": "Christmas", "questions": [
+      { "q": "What date is Christmas Day?", "a": "December 25" },
+      { "q": "Santa Claus is also known as Saint what?", "a": "Saint Nicholas" },
+      { "q": "Whose birthday is Christmas Day?", "a": "Jesus" },
+      { "q": "Under what plant is it customary to kiss a loved one?", "a": "Mistletoe" },
+      { "q": "Which Christmas-themed ballet features a Rat King?", "a": "The Nutcracker" },
+      { "q": "What three gifts did the wise men offer Jesus?", "a": "Gold, frankincense, and myrrh" },
+      { "q": "Which angel told Mary she would give birth to Jesus?", "a": "Gabriel" },
+      { "q": "What brand solidified the red and white image of Santa in the thirties?", "a": "Coca-Cola" },
+      { "q": "Who voices Sam the Snowman in Rudolph the Red-Nosed Reindeer?", "a": "Burl Ives" }
+    ]},
+    { "name": "Movies", "questions": [
+      { "q": "In the 1950s, the country of Japan was first terrorized by this giant lizard.", "a": "Godzilla" },
+      { "q": "In what movie is Earth attacked by aliens with great hearing?", "a": "A Quiet Place" },
+      { "q": "What movie is this?", "image": "https://i0.wp.com/thelastdrivein.com/wp-content/uploads/2025/03/beast-with-five-fingers.png?w=936&ssl=1", "a": "The Beast with Five Fingers" },
+      { "q": "In Coraline, the Other Mother is really a creature called this.", "a": "The Beldam" },
+      { "q": "What movie is this?", "image": "https://pics.filmaffinity.com/signs-996305804-large.jpg", "a": "Signs" },
+      { "q": "What movie is this?", "image": "https://i.guim.co.uk/img/static/sys-images/Film/Pix/pictures/2008/12/18/MOSES460.jpg?width=620&dpr=2&s=none&crop=none", "a": "The Ten Commandments" },
+      { "q": "What movie is this?", "image": "https://www.slashfilm.com/img/gallery/hulk-hogan-had-an-unforgettable-cameo-in-this-horror-comedy/intro-1753390175.webp", "a": "Gremlins 2: The New Batch" },
+      { "q": "Who directed Close Encounters of the Third Kind?", "a": "Steven Spielberg" },
+      { "q": "Who is this?", "image": "https://goldenglobes.com/wp-content/uploads/2023/10/jeff_bridges_20081.jpg?w=1195", "a": "Jeff Bridges" }
+    ]},
+    { "name": "Music", "questions": [
+      { "q": "Name three Queen songs.", "a": "e.g. Bohemian Rhapsody, We Will Rock You, Don't Stop Me Now" },
+      { "q": "Play a C major triad on the piano.", "a": "C – E – G" },
+      { "q": "Play a C minor triad on the piano.", "a": "C – E♭ – G" },
+      { "q": "Name another of the violin family of instruments.", "a": "Viola, cello, double bass" },
+      { "q": "Play a G major triad on the piano.", "a": "G – B – D" },
+      { "q": "Who are these?", "image": "https://people.com/thmb/TXsSMHLepDSzwZub-_jlAaPfcH8=/750x0/filters:no_upscale():max_bytes(150000):strip_icc():focal(749x0:751x2)/britney-spears-backstreet-boys-102423-1-924b317bafa64289a3ed2291014799fd.jpg", "a": "Britney Spears and the Backstreet Boys" },
+      { "q": "Who famously sang \"You've Lost That Lovin' Feelin'\"?", "a": "The Righteous Brothers" },
+      { "q": "Who is this?", "image": "https://hips.hearstapps.com/hmg-prod/images/gettyimages-1189389361.jpg?resize=1200:*", "a": "" },
+      { "q": "Play a C major scale on the piano.", "a": "C D E F G A B C" }
+    ]},
+    { "name": "Events", "questions": [
+      { "q": "What holiday happens about a week after Christmas?", "a": "New Year's Day" },
+      { "q": "What day do we celebrate America's independence with fireworks?", "a": "July 4th" },
+      { "q": "In 1969 the Apollo 11 mission was the first time humans ever walked on what?", "a": "The Moon" },
+      { "q": "Which African American leader's birthday is celebrated in February?", "a": "Frederick Douglass (Feb 14) — the origin of Black History Month" },
+      { "q": "What day marks the anniversary of the tragic collapse of the World Trade Center?", "a": "September 11" },
+      { "q": "In 1773 this party of American colonists defied England by dumping tea into Boston Harbor.", "a": "The Boston Tea Party" },
+      { "q": "Who was originally blamed for shooting JFK?", "a": "Lee Harvey Oswald" },
+      { "q": "What event in 1989 symbolized the end of the Cold War?", "a": "The fall of the Berlin Wall" },
+      { "q": "Name three Axis powers during WWII.", "a": "Germany, Italy, Japan" }
+    ]}
+  ]
+}

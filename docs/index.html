@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Family Trivia</title>
+<style>
+  :root {
+    --bg: #14122b; --panel: #221f45; --tile: #2f2a66; --tile-hi: #3d3790;
+    --text: #f4f2ff; --muted: #a9a4d6; --accent: #ffc94d; --good: #3ecf8e; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
+  button { font: inherit; color: inherit; border: 0; border-radius: 12px; cursor: pointer;
+    background: var(--tile); padding: .6em 1.1em; }
+  button:hover { background: var(--tile-hi); }
+  button:disabled { opacity: .35; cursor: default; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  header h1 { margin: 0; font-size: 1.4rem; flex: 1; color: var(--accent); }
+  header .tools button { font-size: .85rem; padding: .45em .8em; }
+  .hidden { display: none !important; }
+
+  /* game picker */
+  .games { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .games button { text-align: left; padding: 1.2em; font-size: 1.05rem; }
+
+  /* scoreboard */
+  .players { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 20px; }
+  .player { background: var(--panel); border-radius: 16px; padding: 12px 14px; text-align: center;
+    border: 3px solid transparent; transition: border-color .2s, transform .2s; }
+  .player.turn { border-color: var(--accent); transform: scale(1.04); }
+  .player .name { font-weight: 700; font-size: 1.2rem; }
+  .player .score { font-size: 2.2rem; font-weight: 800; color: var(--accent); }
+  .player .adj { display: flex; gap: 6px; justify-content: center; }
+  .player .adj button { padding: .2em .7em; font-size: .9rem; }
+  .turnline { text-align: center; font-size: 1.5rem; margin: 4px 0 18px; }
+  .turnline b { color: var(--accent); }
+
+  /* board */
+  .board { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .cat { min-height: 130px; font-size: 1.3rem; font-weight: 700; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; gap: 8px; border-radius: 18px; }
+  .cat .dots { display: flex; gap: 6px; }
+  .cat .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); }
+  .cat .dot.used { background: #ffffff30; }
+
+  /* question */
+  .qview { background: var(--panel); border-radius: 20px; padding: 24px; text-align: center; }
+  .qmeta { color: var(--muted); font-size: 1rem; margin-bottom: 10px; }
+  .qtext { font-size: clamp(1.4rem, 3.5vw, 2.4rem); font-weight: 700; margin: 10px 0 18px; }
+  .media { margin: 0 auto 18px; max-width: 100%; }
+  .media img, .media video { max-width: 100%; max-height: 55vh; border-radius: 12px; }
+  .media iframe { width: min(100%, 900px); aspect-ratio: 16/9; border: 0; border-radius: 12px; }
+  .answer { font-size: clamp(1.2rem, 3vw, 2rem); color: var(--good); margin: 10px 0 18px; font-weight: 700; }
+  .answer.none { color: var(--muted); font-weight: 400; font-style: italic; }
+  .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .actions button { font-size: 1.2rem; padding: .7em 1.4em; }
+  .good { background: var(--good); color: #062; } .good:hover { background: #5fe0a6; }
+  .bad { background: var(--bad); color: #400; } .bad:hover { background: #ff8a8a; }
+  .reveal { background: var(--accent); color: #331; } .reveal:hover { background: #ffd878; }
+  .steal { margin-top: 14px; color: var(--muted); font-size: 1rem; }
+  .steal button { font-size: .95rem; padding: .4em .9em; margin: 4px; }
+
+  .over { text-align: center; padding: 30px; }
+  .over h2 { font-size: 2.4rem; color: var(--accent); }
+  .err { background: #5a1f2a; padding: 12px; border-radius: 12px; margin: 10px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">Family Trivia</h1>
+    <div class="tools">
+      <button id="undoBtn" class="hidden" title="Undo last action">↶ Undo</button>
+      <button id="skipBtn" class="hidden" title="Pass the turn">Skip turn</button>
+      <button id="resetBtn" class="hidden">Restart</button>
+      <button id="homeBtn" class="hidden">All games</button>
+    </div>
+  </header>
+  <div id="msg"></div>
+
+  <section id="picker"><div class="games" id="games"></div></section>
+
+  <section id="play" class="hidden">
+    <div class="players" id="players"></div>
+    <div id="boardView">
+      <div class="turnline" id="turnline"></div>
+      <div class="board" id="board"></div>
+    </div>
+    <div id="questionView" class="qview hidden"></div>
+    <div id="overView" class="over hidden"></div>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let game = null, gameId = null, S = null, undoStack = [];
+
+// ---------- data loading ----------
+async function loadJSON(url) {
+  const r = await fetch(url, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  return r.json();
+}
+
+async function showPicker() {
+  game = null; gameId = null;
+  undoStack = [];
+  window.history.replaceState(null, "", location.pathname);
+  $('picker').classList.remove('hidden'); $('play').classList.add('hidden');
+  ['undoBtn','skipBtn','resetBtn','homeBtn'].forEach(b => $(b).classList.add('hidden'));
+  $('title').textContent = 'Family Trivia';
+  try {
+    const list = await loadJSON('games/index.json');
+    $('games').innerHTML = '';
+    for (const g of list) {
+      const b = document.createElement('button');
+      b.textContent = g.title;
+      b.onclick = () => openGame(g.id);
+      $('games').appendChild(b);
+    }
+  } catch (e) { $('msg').innerHTML = `<div class="err">Couldn't load game list: ${e.message}</div>`; }
+}
+
+async function openGame(id) {
+  try { game = await loadJSON(`games/${id}.json`); }
+  catch (e) { $('msg').innerHTML = `<div class="err">Couldn't load game "${id}": ${e.message}</div>`; return; }
+  $('msg').innerHTML = '';
+  gameId = id;
+  window.history.replaceState(null, '', `?game=${encodeURIComponent(id)}`);
+  // each category's question list is split evenly among players, in order
+  game.categories.forEach(c => {
+    const per = Math.floor(c.questions.length / game.players.length);
+    c.byPlayer = game.players.map((_, p) => c.questions.slice(p * per, (p + 1) * per)
+      .map(q => typeof q === 'string' ? { q } : q));
+  });
+  undoStack = [];
+  S = loadState() || freshState();
+  $('title').textContent = game.title;
+  $('picker').classList.add('hidden'); $('play').classList.remove('hidden');
+  ['undoBtn','skipBtn','resetBtn','homeBtn'].forEach(b => $(b).classList.remove('hidden'));
+  render();
+}
+
+// ---------- state ----------
+function freshState() {
+  return {
+    scores: game.players.map(() => 0),
+    turn: 0,
+    used: game.players.map(() => game.categories.map(() => 0)), // next question index per player/category
+    current: null // { cat, revealed }
+  };
+}
+const key = () => `trivia:${gameId}`;
+function saveState() { try { localStorage.setItem(key(), JSON.stringify(S)); } catch {} }
+function loadState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(key()));
+    if (s && s.scores.length === game.players.length && s.used[0].length === game.categories.length) return s;
+  } catch {}
+  return null;
+}
+function commit(fn) {
+  undoStack.push(JSON.stringify(S));
+  if (undoStack.length > 100) undoStack.shift();
+  fn();
+  saveState(); render();
+}
+function remaining(p, c) { return game.categories[c].byPlayer[p].length - S.used[p][c]; }
+function playerHasAny(p) { return game.categories.some((_, c) => remaining(p, c) > 0); }
+function nextTurn() {
+  const n = game.players.length;
+  for (let i = 1; i <= n; i++) {
+    const p = (S.turn + i) % n;
+    if (playerHasAny(p)) { S.turn = p; return; }
+  }
+}
+
+// ---------- rendering ----------
+function render() {
+  const pts = game.points || 100;
+  // scoreboard
+  $('players').innerHTML = '';
+  game.players.forEach((name, p) => {
+    const d = document.createElement('div');
+    d.className = 'player' + (p === S.turn ? ' turn' : '');
+    d.innerHTML = `<div class="name"></div><div class="score">${S.scores[p]}</div>
+      <div class="adj"><button data-d="-${pts}">−${pts}</button><button data-d="${pts}">+${pts}</button></div>`;
+    d.querySelector('.name').textContent = name;
+    d.querySelectorAll('button').forEach(b => b.onclick = () => commit(() => S.scores[p] += +b.dataset.d));
+    $('players').appendChild(d);
+  });
+  $('undoBtn').disabled = undoStack.length === 0;
+
+  const anyLeft = game.players.some((_, p) => playerHasAny(p));
+  $('boardView').classList.toggle('hidden', !!S.current || !anyLeft);
+  $('questionView').classList.toggle('hidden', !S.current);
+  $('overView').classList.toggle('hidden', !!S.current || anyLeft);
+  $('skipBtn').disabled = !!S.current || !anyLeft;
+
+  if (S.current) renderQuestion();
+  else if (anyLeft) renderBoard();
+  else renderOver();
+}
+
+function renderBoard() {
+  if (!playerHasAny(S.turn)) nextTurn();
+  $('turnline').innerHTML = `<b></b>, pick a category!`;
+  $('turnline').querySelector('b').textContent = game.players[S.turn];
+  $('board').innerHTML = '';
+  game.categories.forEach((c, ci) => {
+    const b = document.createElement('button');
+    b.className = 'cat';
+    const total = c.byPlayer[S.turn].length;
+    b.innerHTML = `<span></span><span class="dots">${
+      Array.from({ length: total }, (_, i) => `<span class="dot${i < S.used[S.turn][ci] ? ' used' : ''}"></span>`).join('')}</span>`;
+    b.firstChild.textContent = c.name;
+    b.disabled = remaining(S.turn, ci) <= 0;
+    b.onclick = () => commit(() => S.current = { cat: ci, revealed: false });
+    $('board').appendChild(b);
+  });
+}
+
+function mediaHTML(q, prefix = '') {
+  const img = q[prefix ? 'answerImage' : 'image'], vid = q[prefix ? 'answerVideo' : 'video'], aud = q[prefix ? 'answerAudio' : 'audio'];
+  const start = +q.start || 0, end = +q.end || 0;
+  let h = '';
+  if (img) h += `<div class="media"><img src="${esc(img)}" alt="" referrerpolicy="no-referrer"></div>`;
+  if (vid) {
+    const yt = vid.match(/(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/)|youtu\.be\/)([\w-]{11})/);
+    if (yt) {
+      const params = new URLSearchParams({ rel: 0, ...(start && { start }), ...(end && { end }) });
+      h += `<div class="media"><iframe src="https://www.youtube-nocookie.com/embed/${yt[1]}?${params}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe></div>`;
+    } else {
+      const frag = start || end ? `#t=${start}${end ? ',' + end : ''}` : '';
+      h += `<div class="media"><video src="${esc(vid)}${frag}" controls playsinline></video></div>`;
+    }
+  }
+  if (aud) h += `<div class="media"><audio src="${esc(aud)}" controls></audio></div>`;
+  return h;
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+function renderQuestion() {
+  const { cat, revealed } = S.current;
+  const c = game.categories[cat], p = S.turn, idx = S.used[p][cat];
+  const q = c.byPlayer[p][idx];
+  const pts = q.points || game.points || 100;
+  const v = $('questionView');
+  v.innerHTML = `
+    <div class="qmeta">${esc(c.name)} · for <b>${esc(game.players[p])}</b> · question ${idx + 1} of ${c.byPlayer[p].length} · ${pts} pts</div>
+    <div class="qtext">${esc(q.q || '')}</div>
+    ${mediaHTML(q)}
+    ${revealed ? `<div class="answer ${q.a ? '' : 'none'}">${q.a ? esc(q.a) : '(no answer recorded)'}</div>${mediaHTML(q, 'a')}` : ''}
+    <div class="actions">
+      ${revealed ? '' : '<button class="reveal" id="revealBtn">Reveal answer</button>'}
+      <button class="good" id="rightBtn">✔ Correct +${pts}</button>
+      <button class="bad" id="wrongBtn">✘ Wrong</button>
+      <button id="backBtn">Back to board</button>
+    </div>
+    ${game.players.length > 1 ? `<div class="steal">Someone else got it?
+      ${game.players.map((n, i) => i === p ? '' : `<button data-p="${i}">${esc(n)} steals +${pts}</button>`).join('')}</div>` : ''}`;
+
+  // make sure video clips stop at their end time
+  const vid = v.querySelector('video');
+  if (vid && q.end) vid.addEventListener('timeupdate', () => { if (vid.currentTime >= q.end) vid.pause(); });
+
+  const finish = (winner) => commit(() => {
+    if (winner != null) S.scores[winner] += pts;
+    S.used[p][cat]++;
+    S.current = null;
+    nextTurn();
+  });
+  $('revealBtn')?.addEventListener('click', () => commit(() => S.current.revealed = true));
+  $('rightBtn').onclick = () => finish(p);
+  $('wrongBtn').onclick = () => finish(null);
+  $('backBtn').onclick = () => commit(() => S.current = null);
+  v.querySelectorAll('.steal button').forEach(b => b.onclick = () => finish(+b.dataset.p));
+}
+
+function renderOver() {
+  const max = Math.max(...S.scores);
+  const winners = game.players.filter((_, i) => S.scores[i] === max);
+  $('overView').innerHTML = `<h2>🏆 ${esc(winners.join(' & '))} ${winners.length > 1 ? 'tie' : 'wins'}!</h2>
+    <p>${game.players.map((n, i) => `${esc(n)}: ${S.scores[i]}`).join(' · ')}</p>`;
+}
+
+// ---------- controls ----------
+$('undoBtn').onclick = () => { if (undoStack.length) { S = JSON.parse(undoStack.pop()); saveState(); render(); } };
+$('skipBtn').onclick = () => commit(nextTurn);
+$('resetBtn').onclick = () => { if (confirm('Restart this game? Scores will be cleared.')) commit(() => S = freshState()); };
+$('homeBtn').onclick = showPicker;
+document.addEventListener('keydown', e => {
+  if (!S?.current || e.target.tagName === 'INPUT') return;
+  if (e.key === ' ' && !S.current.revealed) { e.preventDefault(); $('revealBtn')?.click(); }
+  else if (e.key === 'y') $('rightBtn')?.click();
+  else if (e.key === 'n') $('wrongBtn')?.click();
+  else if (e.key === 'Escape') $('backBtn')?.click();
+});
+
+const startId = new URLSearchParams(location.search).get('game');
+startId ? openGame(startId) : showPicker();
+</script>
+</body>
+</html>

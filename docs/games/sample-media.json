@@ -1,0 +1,15 @@
+{
+  "title": "Sample: picture & video clues",
+  "players": ["Player 1", "Player 2"],
+  "points": 100,
+  "categories": [
+    { "name": "Picture clues", "questions": [
+      { "q": "What landmark is this?", "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Statue_of_Liberty_7.jpg/640px-Statue_of_Liberty_7.jpg", "a": "The Statue of Liberty" },
+      { "q": "What animal is this?", "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg", "a": "A cat", "answerImage": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg" }
+    ]},
+    { "name": "Video clues", "questions": [
+      { "q": "What is happening in this clip?", "video": "https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.360p.webm", "start": 5, "end": 15, "a": "A cartoon rabbit wakes up (Big Buck Bunny)" },
+      { "q": "YouTube clips work too — paste any YouTube link with optional start/end seconds.", "video": "https://www.youtube.com/watch?v=aqz-KE-bpKQ", "start": 30, "end": 40, "a": "Big Buck Bunny" }
+    ]}
+  ]
+}
