@@ -1,13 +1,14 @@
-# Builds one GitHub Pages site from two branches:
+# Builds one GitHub Pages site from three branches:
 #   /bed/             bed plan        (claude/youthful-thompson-u9dl1f)
 #   /route-narrator/  Roadside Narrator (claude/epic-mayer-g1u1mf)
-# The same file lives on both branches, so a push to either redeploys both apps.
+#   /trivia/          Family Trivia   (main, docs/ folder)
+# The same file lives on all three branches, so a push to any of them redeploys every app.
 name: Deploy site to GitHub Pages
 
 on:
   push:
-    branches: [claude/youthful-thompson-u9dl1f, claude/epic-mayer-g1u1mf]
-    paths: ['bed/**', 'route-narrator/**', '.github/workflows/pages.yml']
+    branches: [claude/youthful-thompson-u9dl1f, claude/epic-mayer-g1u1mf, main]
+    paths: ['bed/**', 'route-narrator/**', 'docs/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -34,6 +35,10 @@ jobs:
         with:
           ref: claude/epic-mayer-g1u1mf
           path: narrator-src
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: trivia-src
       - uses: actions/configure-pages@v5
         with:
           enablement: true
@@ -47,6 +52,7 @@ jobs:
           sed -i "s/app\.js\"/app.js?v=${BED}\"/; s/style\.css\"/style.css?v=${BED}\"/" _site/bed/index.html
           cp -r narrator-src/route-narrator _site/route-narrator
           rm -rf _site/route-narrator/tests
+          cp -r trivia-src/docs _site/trivia
           NAR=$(git -C narrator-src rev-parse --short HEAD)
           sed -i "s/js\/app\.js\"/js\/app.js?v=${NAR}\"/; s/css\/styles\.css\"/css\/styles.css?v=${NAR}\"/" _site/route-narrator/index.html
           cat > _site/index.html <<'HTML'
@@ -73,6 +79,7 @@ jobs:
               <h1>Projects</h1>
               <a class="card" href="route-narrator/"><b>Roadside Narrator</b><span>Spoken stories about the places along your driving route.</span></a>
               <a class="card" href="bed/"><b>Bed plan</b><span>Interactive build plan, cut list and hardware list.</span></a>
+              <a class="card" href="trivia/"><b>Family Trivia</b><span>Category board, turns and scoring for family trivia night.</span></a>
             </main>
           </body>
           </html>
